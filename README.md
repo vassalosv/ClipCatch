@@ -95,25 +95,25 @@ MIT License — free for personal and educational use.
 - Improved HLS assembly reliability and segment handling in `offscreen.js`
 - Minor bug fixes and stability improvements across all components
 
-### v0.3 — 2026-03-24
+### v0.3 — 2026-03-22
 - Added built-in **HLS/DASH assembly engine** (`offscreen.js` + `offscreen.html`) — no external tools required
 - Added **MP4 remuxer** (`remux.js`) to wrap TS segments into a valid MP4 container
 - Refactored `background.js` for cleaner job coordination with the offscreen document
 - Updated manifest to declare `offscreen` and `declarativeNetRequest` permissions
 
-### v0.2 — 2026-03-24
+### v0.2 — 2026-03-21
 - Major rewrite of `background.js`, `popup.html`, `popup.js`, and `content.js`
 - Added **Stream Commands window** (`commands.html` / `commands.js`) showing ready-to-use yt-dlp/ffmpeg commands
 - Added download tracking panel with progress, speed, and ETA
 - Added cancel support for in-flight downloads and HLS jobs
 - Redesigned popup UI with filter tabs and batch selection
 
-### v0.1 — 2026-03-24 *(first commit)*
+### v0.1 — 2026-02-14 *(first commit)*
 - Initial working extension: network request monitoring via service worker
 - DOM scanner for `<video>` / `<audio>` elements
 - Popup with filter tabs (Video, Audio, Stream, Other), batch download, and copy URL
 - Live badge counter on the extension icon
 - Auto-polling every 2 seconds
 
-### Initial commit — 2026-03-24
+### Initial commit — 2026-02-11
 - Repository created with `LICENSE` (MIT) and placeholder `README.md`
