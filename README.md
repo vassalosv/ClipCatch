@@ -92,6 +92,10 @@ MIT License — free for personal and educational use.
 
 ## Changelog
 
+### v0.7.1 — 2026-03-24
+- Replaced dynamic hostname in popup footer with a static **"ClipCatch on Github.com"** link pointing to the repository
+- Removed unused `footerTabInfo` element and hostname-detection code from `popup.js`
+
 ### v0.7 — 2026-03-24
 - **Page-level thumbnail channel**: introduced `PAGE_THUMB` message so HLS/DASH stream items (detected via network requests, not DOM) also receive a visual preview — `content.js` captures the first usable frame from any `<video>` on the page and broadcasts it; `background.js` back-fills it onto all existing items in that tab that have no thumbnail yet
 - Thumbnail back-fill fires on initial page scan and on every `loadeddata` event, covering late-loading and MSE-based (blob URL) players

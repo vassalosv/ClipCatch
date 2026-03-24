@@ -22,7 +22,6 @@ const selectAllBtn = $('selectAllBtn');
 const selectCount  = $('selectCount');
 const dlSelBtn     = $('downloadSelectedBtn');
 const toastWrap    = $('toastContainer');
-const footerTab    = $('footerTabInfo');
 const dlPanelList  = $('downloadPanelList');
 const dlPanelBadge = $('dlPanelBadge');
 
@@ -449,7 +448,7 @@ window.addEventListener('unload',()=>{if(mediaPoller)clearInterval(mediaPoller);
 async function init(){
   try{
     const[tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    if(tab){currentTabId=tab.id;try{footerTab.textContent=new URL(tab.url||'').hostname;}catch{footerTab.textContent='Current tab';}}
+    if(tab){currentTabId=tab.id;}
   }catch(e){}
   loadMedia();
   fetchAllProgressLoop();

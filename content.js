@@ -47,14 +47,18 @@
   }
 
   function captureVideoThumb(el) {
+    // 1. Try canvas — works for same-origin / non-tainted video
     try {
-      if (el.readyState < 2 || el.videoWidth === 0 || el.videoHeight === 0) return null;
-      const W = 80, H = Math.round(W * el.videoHeight / el.videoWidth) || 45;
-      const canvas = document.createElement('canvas');
-      canvas.width = W; canvas.height = H;
-      canvas.getContext('2d').drawImage(el, 0, 0, W, H);
-      return canvas.toDataURL('image/jpeg', 0.65);
-    } catch (e) { return null; } // cross-origin or security errors are expected
+      if (el.readyState >= 2 && el.videoWidth > 0 && el.videoHeight > 0) {
+        const W = 80, H = Math.round(W * el.videoHeight / el.videoWidth) || 45;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        canvas.getContext('2d').drawImage(el, 0, 0, W, H);
+        return canvas.toDataURL('image/jpeg', 0.65); // throws SecurityError if tainted
+      }
+    } catch (e) {} // cross-origin canvas taint — fall through
+    // 2. Fall back to poster attribute (set by virtually every streaming player)
+    return el.poster || null;
   }
 
   function isAllowed(url) {
@@ -144,6 +148,18 @@
   // Watch for dynamically added players
   const observer = new MutationObserver(report);
   observer.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Capture a real playing frame on first timeupdate (fires when video is actually rendering)
+  const capturedEls = new WeakSet();
+  document.addEventListener('timeupdate', (e) => {
+    const el = e.target;
+    if (!el || el.tagName !== 'VIDEO' || capturedEls.has(el)) return;
+    const thumb = captureVideoThumb(el);
+    if (thumb) {
+      capturedEls.add(el);
+      chrome.runtime.sendMessage({ type: 'PAGE_THUMB', thumbnail: thumb }).catch(() => {});
+    }
+  }, true);
 
   // Catch lazy-loaded video sources and capture thumbnail once first frame loads
   document.addEventListener('loadeddata', (e) => {
