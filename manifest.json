@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Media DownloadHelper",
-  "version": "6.0.0",
-  "description": "Detect and download videos. Built-in HLS/DASH assembler — no external tools needed.",
+  "version": "7.0.0",
+  "description": "Detect and download videos. Built-in HLS/DASH assembler — no size limits, no external tools.",
   "permissions": [
     "webRequest",
     "downloads",
@@ -10,6 +10,7 @@
     "storage",
     "scripting",
     "alarms",
+    "offscreen",
     "declarativeNetRequest"
   ],
   "host_permissions": ["<all_urls>"],
@@ -39,7 +40,7 @@
     "128": "icons/icon128.png"
   },
   "web_accessible_resources": [{
-    "resources": ["icons/*", "commands.html", "commands.js"],
+    "resources": ["icons/*", "commands.html", "commands.js", "offscreen.html", "offscreen.js"],
     "matches": ["<all_urls>"]
   }]
 }
