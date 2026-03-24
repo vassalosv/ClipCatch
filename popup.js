@@ -1,5 +1,5 @@
 // ============================
-// Media DownloadHelper - Popup v6
+// ClipCatch - Popup
 // HLS assembler + download tracking
 // ============================
 'use strict';
@@ -320,7 +320,7 @@ function createHLSRow(job){
       <div class="hls-controls">
         <span class="hls-type-badge">HLS</span>
         ${isActive?`<button class="dl-btn dl-btn-cancel" data-action="cancel-hls" data-id="${esc(job.id)}" title="Cancel">✕</button>`:''}
-        ${job.state==='complete'&&job.downloadId?`<button class="dl-btn" data-action="show-dl" data-id="${job.downloadId}" title="Show in folder">📁</button>`:''}
+        ${job.state==='complete'?`<span style="font-size:11px;color:var(--green);padding:0 4px">✓ Saved</span>`:''}
       </div>
     </div>
     ${bar}

@@ -1,5 +1,5 @@
 // ============================
-// Media DownloadHelper - Background Service Worker v7
+// ClipCatch - Background Service Worker
 // HLS assembly delegated to offscreen document (has real DOM APIs)
 // ============================
 
@@ -118,16 +118,23 @@ function broadcastHLSJobs() {
 }
 
 // ── chrome.downloads tracking ──────────────────────────────────────────────
+// IMPORTANT: we only track downloads that WE started (ids in ourDownloadIds).
+// Never auto-ingest every Chrome download — that causes stale history on reopen.
+const ourDownloadIds = new Set();
+
 function recordSample(id,bytes){if(!speedSamples.has(id))speedSamples.set(id,[]);const s=speedSamples.get(id);s.push({bytes,time:Date.now()});if(s.length>5)s.shift();}
 function calcSpeed(id){const s=speedSamples.get(id);if(!s||s.length<2)return 0;const dt=(s[s.length-1].time-s[0].time)/1000,db=s[s.length-1].bytes-s[0].bytes;return dt>0?db/dt:0;}
 
+// onCreated fires for ALL Chrome downloads — ignore any we didn't start
 chrome.downloads.onCreated.addListener((item)=>{
-  activeDownloads.set(item.id,{id:item.id,url:item.url,fileName:item.filename||'file',state:'in_progress',bytesReceived:item.bytesReceived||0,totalBytes:item.totalBytes||0,startTime:Date.now(),speed:0,eta:'',error:null,paused:false,progress:-1});
-  recordSample(item.id,item.bytesReceived||0); broadcastDownloads();
+  if(!ourDownloadIds.has(item.id)) return;
+  const dl=activeDownloads.get(item.id);
+  if(dl){dl.totalBytes=item.totalBytes||0; activeDownloads.set(item.id,dl); broadcastDownloads();}
 });
+
 chrome.downloads.onChanged.addListener((delta)=>{
   const id=delta.id;
-  if(!activeDownloads.has(id)){chrome.downloads.search({id},(items)=>{if(items?.[0]){const d=items[0];activeDownloads.set(id,{id,url:d.url,fileName:d.filename||'file',state:d.state||'in_progress',bytesReceived:d.bytesReceived||0,totalBytes:d.totalBytes||0,startTime:Date.now(),speed:0,eta:'',error:d.error||null,paused:d.paused||false,progress:-1});broadcastDownloads();}}); return;}
+  if(!activeDownloads.has(id)) return; // ignore downloads not started by us
   const dl=activeDownloads.get(id);
   if(delta.bytesReceived){dl.bytesReceived=delta.bytesReceived.current;recordSample(id,dl.bytesReceived);dl.speed=calcSpeed(id);}
   if(delta.totalBytes) dl.totalBytes=delta.totalBytes.current;
@@ -138,10 +145,26 @@ chrome.downloads.onChanged.addListener((delta)=>{
   if(dl.totalBytes>0){dl.progress=Math.round((dl.bytesReceived/dl.totalBytes)*100);dl.eta=fmtEta(dl.totalBytes-dl.bytesReceived,dl.speed);}else{dl.progress=-1;dl.eta='';}
   activeDownloads.set(id,dl); broadcastDownloads();
 });
+
+// Poll only the specific IDs we own — never query all in-progress downloads
 setInterval(()=>{
   const inProg=[...activeDownloads.values()].filter(d=>d.state==='in_progress');
   if(!inProg.length) return;
-  chrome.downloads.search({state:'in_progress'},(items)=>{for(const item of(items||[])){const dl=activeDownloads.get(item.id);if(!dl)continue;dl.bytesReceived=item.bytesReceived||dl.bytesReceived;dl.totalBytes=item.totalBytes||dl.totalBytes;dl.paused=item.paused;recordSample(item.id,dl.bytesReceived);dl.speed=calcSpeed(item.id);dl.progress=dl.totalBytes>0?Math.round((dl.bytesReceived/dl.totalBytes)*100):-1;dl.eta=dl.totalBytes>0?fmtEta(dl.totalBytes-dl.bytesReceived,dl.speed):'';activeDownloads.set(item.id,dl);}broadcastDownloads();});
+  for(const dl of inProg){
+    chrome.downloads.search({id:dl.id},(items)=>{
+      const item=items?.[0]; if(!item||!activeDownloads.has(item.id)) return;
+      const d=activeDownloads.get(item.id);
+      d.bytesReceived=item.bytesReceived||d.bytesReceived;
+      d.totalBytes=item.totalBytes||d.totalBytes;
+      d.paused=item.paused;
+      recordSample(item.id,d.bytesReceived);
+      d.speed=calcSpeed(item.id);
+      d.progress=d.totalBytes>0?Math.round((d.bytesReceived/d.totalBytes)*100):-1;
+      d.eta=d.totalBytes>0?fmtEta(d.totalBytes-d.bytesReceived,d.speed):'';
+      activeDownloads.set(item.id,d);
+    });
+  }
+  broadcastDownloads();
 },800);
 function broadcastDownloads(){
   const list=[...activeDownloads.values()].map(dl=>({...dl,bytesFormatted:fmtBytes(dl.bytesReceived)||'0 B',totalFormatted:dl.totalBytes>0?fmtBytes(dl.totalBytes):'Unknown',speedFormatted:fmtSpeed(dl.speed),fileName:dl.fileName.split(/[/\\]/).pop()}));
@@ -210,7 +233,7 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
   if(msg.type==='DOWNLOAD_MEDIA'){
     chrome.downloads.download({url:msg.url,filename:msg.fileName,saveAs:msg.saveAs||false},(id)=>{
       if(chrome.runtime.lastError||id==null){respond({success:false,error:chrome.runtime.lastError?.message});}
-      else{activeDownloads.set(id,{id,url:msg.url,fileName:msg.fileName.split(/[/\\]/).pop(),state:'in_progress',bytesReceived:0,totalBytes:0,startTime:Date.now(),speed:0,eta:'',error:null,paused:false,progress:-1,bytesFormatted:'0 B',totalFormatted:'Unknown',speedFormatted:''});broadcastDownloads();respond({success:true,downloadId:id});}
+      else{ourDownloadIds.add(id); activeDownloads.set(id,{id,url:msg.url,fileName:msg.fileName.split(/[/\\]/).pop(),state:'in_progress',bytesReceived:0,totalBytes:0,startTime:Date.now(),speed:0,eta:'',error:null,paused:false,progress:-1,bytesFormatted:'0 B',totalFormatted:'Unknown',speedFormatted:''});broadcastDownloads();respond({success:true,downloadId:id});}
     }); return true;
   }
 
@@ -264,28 +287,6 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
   if(msg.type==='RESUME_DOWNLOAD'){chrome.downloads.resume(msg.downloadId,()=>respond({success:true}));return true;}
   if(msg.type==='SHOW_DOWNLOAD')  {chrome.downloads.show(msg.downloadId);respond({success:true});return true;}
 
-  // Offscreen doc has created a blob URL and wants background to trigger the download
-  if(msg.type==='OFFSCREEN_DOWNLOAD'){
-    const { blobUrl, fileName, jobId } = msg;
-    chrome.downloads.download({ url: blobUrl, filename: fileName }, (dlId) => {
-      if (chrome.runtime.lastError || dlId == null) {
-        respond({ error: chrome.runtime.lastError?.message || 'Download failed' });
-      } else {
-        // Seed the download tracker so it appears in the Direct Downloads section too
-        activeDownloads.set(dlId, {
-          id: dlId, url: blobUrl,
-          fileName: fileName.split(/[/\\]/).pop(),
-          state: 'in_progress', bytesReceived: 0, totalBytes: 0,
-          startTime: Date.now(), speed: 0, eta: '', error: null, paused: false, progress: -1,
-          bytesFormatted: '0 B', totalFormatted: 'Unknown', speedFormatted: '',
-        });
-        broadcastDownloads();
-        respond({ success: true, downloadId: dlId });
-      }
-    });
-    return true;
-  }
-
   if(msg.type==='OPEN_COMMANDS'){
     const data=msg.data;
     const save=(cb)=>{chrome.storage.session.set({pendingStreamCommands:data},()=>{chrome.storage.local.set({pendingStreamCommands:data},cb);});};
@@ -308,4 +309,4 @@ chrome.tabs.onRemoved.addListener((tabId)=>{clearTab(tabId);const key=`${TAB_MED
 setInterval(()=>{const now=Date.now();for(const[id,j]of hlsJobs){if((j.state==='complete'||j.state==='error'||j.state==='cancelled')&&(now-j.startTime>120000))hlsJobs.delete(id);}},60000);
 setInterval(()=>{const now=Date.now();for(const[id,dl]of activeDownloads){if((dl.state==='complete'||dl.state==='interrupted')&&(now-dl.startTime>60000)){activeDownloads.delete(id);speedSamples.delete(id);}}},30000);
 
-console.log('[Media DownloadHelper] v7 — offscreen HLS assembly engine ready.');
+console.log('[ClipCatch] — offscreen HLS assembly engine ready.');

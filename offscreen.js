@@ -204,63 +204,87 @@ async function runJob(jobId, url, fileName) {
     // ── Step 3: Merge ──────────────────────────────────────────────────────
     report(jobId, { state:'merging', segDone, segTotal, bytesDone, progress:100, stateLabel:'Merging segments…' });
 
-    // Calculate total size
     const totalSize = buffers.reduce((s,b) => s + b.byteLength, 0);
-    const merged    = new Uint8Array(totalSize);
+    let merged      = new Uint8Array(totalSize);
     let offset = 0;
     for (const buf of buffers) {
       merged.set(new Uint8Array(buf), offset);
       offset += buf.byteLength;
     }
+    // *** Free individual segment buffers immediately — they're now in `merged` ***
+    // This cuts peak memory from ~3× to ~2× the file size.
+    for (let i = 0; i < buffers.length; i++) buffers[i] = null;
+    buffers.length = 0;
 
     // ── Step 4: Remux TS → MP4 ────────────────────────────────────────────
-    // The merged buffer is raw MPEG-TS. We remux it into a proper MP4
-    // container so it plays natively in any video player.
+    // Build clean output filename: strip "(stream)" suffix AND any media extension,
+    // then append .mp4 (or .ts as fallback).
+    // e.g. "tt26443597GR.mp4 (stream)" → "tt26443597GR" → "tt26443597GR.mp4"
+    const cleanName = fileName
+      .replace(/\s*\(stream\)\s*/gi, '')
+      .replace(/\.(mp4|mkv|avi|mov|webm|m3u8|mpd|ts|flv|wmv)$/i, '');
+    let outName   = cleanName + '.mp4';
+    let outMime   = 'video/mp4';
+    let outputData = null; // Uint8Array — declared let so we can free it
+
     report(jobId, { state:'merging', segDone, segTotal, bytesDone, progress:100, stateLabel:'Remuxing to MP4…' });
 
-    let outputBuffer = merged.buffer;
-    let outMime      = 'video/mp2t';
-    // Strip any existing media extension, then add .mp4
-    // e.g. "tt26443597GR.mp4 (stream)" → "tt26443597GR.mp4" → "tt26443597GR" → "tt26443597GR.mp4"
-    const cleanName = fileName
-      .replace(/\s*\(stream\)\s*/gi, '')  // remove " (stream)"
-      .replace(/\.[^.]+$/, '');              // remove last extension (e.g. .mp4, .m3u8)
-    let outName = cleanName + '.mp4';
-
-    try {
-      if (typeof remuxTStoMP4 === 'function') {
-        const mp4Buffer = remuxTStoMP4(merged.buffer);
-        outputBuffer = mp4Buffer.buffer;
-        outMime      = 'video/mp4';
+    // Only attempt remux for files under 600 MB to avoid OOM on large streams.
+    // Above that threshold save raw TS — VLC/MPC-HC/ffmpeg play it fine.
+    const REMUX_SIZE_LIMIT = 600 * 1024 * 1024;
+    if (typeof remuxTStoMP4 === 'function' && totalSize <= REMUX_SIZE_LIMIT) {
+      try {
+        // remuxTStoMP4 returns a Uint8Array — use it directly (NOT .buffer which may be oversized)
+        outputData = remuxTStoMP4(merged.buffer);
+        // *** Free the TS buffer immediately — MP4 data is now in outputData ***
+        // This keeps peak memory at ~1× file size instead of ~2×
+        merged.fill(0); // overwrite to release references held by remux internals
+      } catch (remuxErr) {
+        console.warn('[ClipCatch] Remux failed, saving as .ts:', remuxErr.message);
+        outputData = merged;
+        merged     = null;
+        outName    = cleanName + '.ts';
+        outMime    = 'video/mp2t';
       }
-    } catch (remuxErr) {
-      console.warn('[DLHelper] Remux failed, saving as .ts:', remuxErr.message);
-      outName  = cleanName + '.ts';
-      outMime  = 'video/mp2t';
+    } else {
+      // Too large to remux in-memory, or remux unavailable — save as TS
+      outputData = merged;
+      outName    = cleanName + '.ts';
+      outMime    = 'video/mp2t';
     }
 
     // ── Step 5: Save ──────────────────────────────────────────────────────
-    // Offscreen has URL.createObjectURL; background has chrome.downloads.
-    // We create the Blob URL here and ask background to trigger the download.
+    // IMPORTANT: blob URLs are context-local — a blob created here cannot be
+    // read by the background service worker (different JS context).
+    // Instead we use an <a download> click directly in this offscreen document,
+    // which is a real DOM page and can trigger downloads without a user gesture.
     report(jobId, { state:'saving', segDone, segTotal, bytesDone, progress:100, stateLabel:'Saving file…' });
 
-    const blob    = new Blob([outputBuffer], { type: outMime });
+    const blob    = new Blob([outputData], { type: outMime });
     const blobUrl = URL.createObjectURL(blob);
 
-    chrome.runtime.sendMessage({
-      type:     'OFFSCREEN_DOWNLOAD',
-      jobId,
-      blobUrl,
-      fileName: outName,
-    }, (resp) => {
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000);
-      activeJobs.delete(jobId);
-      if (!resp || resp.error) {
-        report(jobId, { state:'error', error: resp?.error || 'Download failed' });
-      } else {
-        report(jobId, { state:'complete', downloadId: resp.downloadId, segDone, segTotal,
-          bytesDone, bytesDoneFmt: fmtBytes(bytesDone)||'0 B', stateLabel:'Complete' });
-      }
+    // Free outputData immediately — the Blob holds its own copy
+    outputData = null;
+
+    // Anchor-click download: works in any DOM context (including offscreen docs)
+    // without needing chrome.downloads or cross-context blob access.
+    const a = document.createElement('a');
+    a.href     = blobUrl;
+    a.download = outName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // Revoke after Chrome has had time to start reading the blob
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000);
+
+    activeJobs.delete(jobId);
+    report(jobId, {
+      state: 'complete', downloadId: null,
+      segDone, segTotal, bytesDone,
+      bytesDoneFmt: fmtBytes(bytesDone)||'0 B',
+      stateLabel: 'Complete',
     });
 
   } catch(err) {
@@ -291,4 +315,4 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   }
 });
 
-console.log('[Media DLHelper] Offscreen document ready.');
+console.log('[ClipCatch] Offscreen document ready.');

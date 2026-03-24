@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Media DownloadHelper",
+  "name": "ClipCatch",
   "version": "7.0.0",
   "description": "Detect and download videos. Built-in HLS/DASH assembler — no size limits, no external tools.",
   "permissions": [
@@ -26,7 +26,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "Media DownloadHelper"
+    "default_title": "ClipCatch"
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],

@@ -1,12 +1,12 @@
 // ============================
-// Media DownloadHelper - Content Script v3
+// ClipCatch - Content Script
 // ============================
 
 (function () {
   'use strict';
 
-  if (window.__mediaDownloadHelperRunning) return;
-  window.__mediaDownloadHelperRunning = true;
+  if (window.__clipCatchRunning) return;
+  window.__clipCatchRunning = true;
 
   // ── ALLOWED media extensions (sent to background for further classification) ──
   // NOTE: 'ts' is intentionally EXCLUDED — .ts files are HLS segments, not full videos.
