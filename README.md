@@ -14,10 +14,12 @@ A powerful Chrome extension to detect and download video, audio, and streaming m
 - **Copy URL**: Quickly copy any media URL to clipboard
 - **Auto-polling**: Popup refreshes every 2 seconds to catch late-loading media
 - **Built-in HLS/DASH assembler**: Downloads and stitches `.m3u8` / `.mpd` streams directly in the browser — no yt-dlp or ffmpeg needed
+- **MP4 output by default**: Assembled streams are saved as `.mp4` — fMP4/ISOBMFF segments are packaged directly; MPEG-TS segments are remuxed via the built-in remuxer
 - **Retry with backoff**: Segment fetches automatically retry on 429/5xx errors
 - **Download tracking panel**: Monitor active downloads and HLS assembly jobs with progress, speed, and ETA
 - **Stream Commands window**: Displays ready-to-use `yt-dlp` / `ffmpeg` commands for streams that require external tools
 - **Cancel in-flight jobs**: Stop any active HLS assembly or download mid-flight
+- **Video thumbnails**: Popup shows a live screenshot of each detected `<video>` element as its icon
 - **Clean dark UI** with a sleek, professional aesthetic
 
 ### Supported formats
@@ -89,6 +91,11 @@ MIT License — free for personal and educational use.
 ---
 
 ## Changelog
+
+### v0.6 — 2026-03-24
+- **MP4 output for all stream types**: `offscreen.js` now detects segment container format (fMP4 vs MPEG-TS) from magic bytes — fMP4 segments are concatenated directly as `.mp4`; MPEG-TS segments are remuxed; no more `.ts` fallback for modern streams
+- **Video thumbnails in popup**: `content.js` captures a live JPEG frame (80×45) from `<video>` elements using Canvas API and displays it as the item icon; updates on `loadeddata` for late-loading players; falls back to type emoji on cross-origin or unavailable frames
+- Thumbnail data flows through `background.js` and is stored per media item; existing entries get their thumbnail updated if a better one arrives later
 
 ### v0.5 — 2026-03-24
 - Fixed cross-file consistency issues (manifest, popup, content script, offscreen document, commands window)
