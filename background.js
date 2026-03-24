@@ -27,6 +27,7 @@ const STREAM_PLAYLIST_MIME = [
 
 const TAB_MEDIA_KEY   = 'tabMedia';
 const tabMediaStore   = new Map();
+const tabPageThumbs   = new Map(); // tabId -> best thumbnail captured from a <video> on that page
 const activeDownloads = new Map();
 const speedSamples    = new Map();
 
@@ -204,10 +205,11 @@ function addMedia(tabId,url,details){
   }
   const directUrl=type==='stream'?extractDirectUrl(url):null;
   if(directUrl&&!store.has(directUrl)){store.set(directUrl,{url:directUrl,type:'video',fileName:getFileName(directUrl),mimeType:'video/mp4',size:0,sizeFormatted:'Unknown',timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:false,directUrl:null,thumbnail:null,ytdlpCommand:null,ffmpegCommand:null});}
-  store.set(url,{url,type,fileName:buildName(url,type,directUrl),mimeType:details.mimeType||'',size:details.size||0,sizeFormatted:type==='stream'?'HLS/DASH':(fmtBytes(details.size)||'Unknown'),timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:type==='stream',directUrl:directUrl||null,thumbnail:details.thumbnail||null,ytdlpCommand:`yt-dlp "${url}"`,ffmpegCommand:`ffmpeg -i "${url}" -c copy output.mp4`});
+  const thumbnail = details.thumbnail || tabPageThumbs.get(tabId) || null;
+  store.set(url,{url,type,fileName:buildName(url,type,directUrl),mimeType:details.mimeType||'',size:details.size||0,sizeFormatted:type==='stream'?'HLS/DASH':(fmtBytes(details.size)||'Unknown'),timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:type==='stream',directUrl:directUrl||null,thumbnail,ytdlpCommand:`yt-dlp "${url}"`,ffmpegCommand:`ffmpeg -i "${url}" -c copy output.mp4`});
   updateBadge(tabId);persistTab(tabId);
 }
-function clearTab(tabId){tabMediaStore.delete(tabId);updateBadge(tabId);const key=`${TAB_MEDIA_KEY}_${tabId}`;chrome.storage.session.remove(key).catch(()=>chrome.storage.local.remove(key));}
+function clearTab(tabId){tabMediaStore.delete(tabId);tabPageThumbs.delete(tabId);updateBadge(tabId);const key=`${TAB_MEDIA_KEY}_${tabId}`;chrome.storage.session.remove(key).catch(()=>chrome.storage.local.remove(key));}
 
 // ── Network listener ───────────────────────────────────────────────────────
 chrome.webRequest.onResponseStarted.addListener(
@@ -302,6 +304,17 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
   if(msg.type==='CONTENT_MEDIA'){
     const tabId=sender.tab?.id??-1;
     if(tabId>=0&&msg.items){for(const item of msg.items){addMedia(tabId,item.url,{mimeType:item.mimeType||'',size:0,pageUrl:item.pageUrl||'',thumbnail:item.thumbnail||null});}}
+    respond({success:true}); return true;
+  }
+
+  if(msg.type==='PAGE_THUMB'){
+    const tabId=sender.tab?.id??-1;
+    if(tabId>=0&&msg.thumbnail){
+      tabPageThumbs.set(tabId,msg.thumbnail);
+      // Back-fill thumbnail onto any existing items in this tab that don't have one yet
+      const store=tabMediaStore.get(tabId);
+      if(store){let changed=false;for(const item of store.values()){if(!item.thumbnail){item.thumbnail=msg.thumbnail;changed=true;}}if(changed)persistTab(tabId);}
+    }
     respond({success:true}); return true;
   }
 });

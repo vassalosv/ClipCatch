@@ -19,7 +19,7 @@ A powerful Chrome extension to detect and download video, audio, and streaming m
 - **Download tracking panel**: Monitor active downloads and HLS assembly jobs with progress, speed, and ETA
 - **Stream Commands window**: Displays ready-to-use `yt-dlp` / `ffmpeg` commands for streams that require external tools
 - **Cancel in-flight jobs**: Stop any active HLS assembly or download mid-flight
-- **Video thumbnails**: Popup shows a live screenshot of each detected `<video>` element as its icon
+- **Video thumbnails**: Popup shows a live screenshot from the page's `<video>` element as each item's icon — works for both DOM-detected videos and network-intercepted HLS/DASH streams
 - **Clean dark UI** with a sleek, professional aesthetic
 
 ### Supported formats
@@ -91,6 +91,11 @@ MIT License — free for personal and educational use.
 ---
 
 ## Changelog
+
+### v0.7 — 2026-03-24
+- **Page-level thumbnail channel**: introduced `PAGE_THUMB` message so HLS/DASH stream items (detected via network requests, not DOM) also receive a visual preview — `content.js` captures the first usable frame from any `<video>` on the page and broadcasts it; `background.js` back-fills it onto all existing items in that tab that have no thumbnail yet
+- Thumbnail back-fill fires on initial page scan and on every `loadeddata` event, covering late-loading and MSE-based (blob URL) players
+- `tabPageThumbs` map in `background.js` cleaned up on tab navigation and close
 
 ### v0.6 — 2026-03-24
 - **MP4 output for all stream types**: `offscreen.js` now detects segment container format (fMP4 vs MPEG-TS) from magic bytes — fMP4 segments are concatenated directly as `.mp4`; MPEG-TS segments are remuxed; no more `.ts` fallback for modern streams

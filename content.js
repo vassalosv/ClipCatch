@@ -118,6 +118,20 @@
     if (items.length > 0) {
       chrome.runtime.sendMessage({ type: 'CONTENT_MEDIA', items }).catch(() => {});
     }
+    // Also broadcast the best available video thumbnail for this page so that
+    // stream items detected via network requests can get a visual preview.
+    reportPageThumb();
+  }
+
+  function reportPageThumb() {
+    const videos = document.querySelectorAll('video');
+    for (const el of videos) {
+      const thumb = captureVideoThumb(el);
+      if (thumb) {
+        chrome.runtime.sendMessage({ type: 'PAGE_THUMB', thumbnail: thumb }).catch(() => {});
+        return; // first usable frame is enough
+      }
+    }
   }
 
   // Initial scan
@@ -134,7 +148,8 @@
   // Catch lazy-loaded video sources and capture thumbnail once first frame loads
   document.addEventListener('loadeddata', (e) => {
     const el = e.target;
-    if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.currentSrc) {
+    if (!el || (el.tagName !== 'VIDEO' && el.tagName !== 'AUDIO')) return;
+    if (el.currentSrc) {
       const url = resolveUrl(el.currentSrc);
       if (isAllowed(url)) {
         const thumbnail = el.tagName === 'VIDEO' ? captureVideoThumb(el) : null;
@@ -144,6 +159,8 @@
         }).catch(() => {});
       }
     }
+    // Always try to update the page-level thumb (covers blob/MSE streams)
+    if (el.tagName === 'VIDEO') reportPageThumb();
   }, true);
 
 })();
