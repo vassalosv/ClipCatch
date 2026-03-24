@@ -102,9 +102,12 @@ function createItem(item){
     actionBtns=`<button class="action-btn download-btn" title="Download">⬇</button>`;
   }
 
+  const iconContent = item.thumbnail
+    ? `<img class="item-thumb" src='${item.thumbnail}' alt="" onerror="this.style.display='none'">`
+    : meta.icon;
   div.innerHTML=`
     <div class="item-checkbox">${selectedUrls.has(item.url)?'✓':''}</div>
-    <div class="item-type-icon">${meta.icon}</div>
+    <div class="item-type-icon">${iconContent}</div>
     <div class="item-info">
       <div class="item-name" title="${esc(item.fileName)}">${esc(item.fileName)}</div>
       <div class="item-meta">

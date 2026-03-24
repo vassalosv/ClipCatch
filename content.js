@@ -46,6 +46,17 @@
     try { return new URL(url, location.href).href; } catch (e) { return url; }
   }
 
+  function captureVideoThumb(el) {
+    try {
+      if (el.readyState < 2 || el.videoWidth === 0 || el.videoHeight === 0) return null;
+      const W = 80, H = Math.round(W * el.videoHeight / el.videoWidth) || 45;
+      const canvas = document.createElement('canvas');
+      canvas.width = W; canvas.height = H;
+      canvas.getContext('2d').drawImage(el, 0, 0, W, H);
+      return canvas.toDataURL('image/jpeg', 0.65);
+    } catch (e) { return null; } // cross-origin or security errors are expected
+  }
+
   function isAllowed(url) {
     if (!url) return false;
     const resolved = resolveUrl(url);
@@ -61,21 +72,22 @@
     const found = [];
     const seen = new Set();
 
-    function add(rawUrl, mimeType) {
+    function add(rawUrl, mimeType, thumbnail) {
       try {
         const url = resolveUrl(rawUrl);
         if (!seen.has(url) && isAllowed(url)) {
           seen.add(url);
-          found.push({ url, mimeType: mimeType || '', pageUrl: location.href });
+          found.push({ url, mimeType: mimeType || '', pageUrl: location.href, thumbnail: thumbnail || null });
         }
       } catch (e) {}
     }
 
     // <video> and <audio> src / currentSrc
     document.querySelectorAll('video, audio').forEach(el => {
-      if (el.src)        add(el.src, el.type || '');
-      if (el.currentSrc) add(el.currentSrc, '');
-      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || ''); });
+      const thumb = el.tagName === 'VIDEO' ? captureVideoThumb(el) : null;
+      if (el.src)        add(el.src, el.type || '', thumb);
+      if (el.currentSrc) add(el.currentSrc, '', thumb);
+      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || '', thumb); });
     });
 
     // Standalone <source> elements
@@ -119,15 +131,16 @@
   const observer = new MutationObserver(report);
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  // Catch lazy-loaded video sources
-  document.addEventListener('loadedmetadata', (e) => {
+  // Catch lazy-loaded video sources and capture thumbnail once first frame loads
+  document.addEventListener('loadeddata', (e) => {
     const el = e.target;
     if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.currentSrc) {
       const url = resolveUrl(el.currentSrc);
       if (isAllowed(url)) {
+        const thumbnail = el.tagName === 'VIDEO' ? captureVideoThumb(el) : null;
         chrome.runtime.sendMessage({
           type: 'CONTENT_MEDIA',
-          items: [{ url, mimeType: '', pageUrl: location.href }]
+          items: [{ url, mimeType: '', pageUrl: location.href, thumbnail }]
         }).catch(() => {});
       }
     }

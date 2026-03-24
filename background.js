@@ -196,10 +196,15 @@ function persistTab(tabId){const store=tabMediaStore.get(tabId);if(!store)return
 function addMedia(tabId,url,details){
   const type=classify(url,details.mimeType);if(!type)return;
   if(!tabMediaStore.has(tabId))tabMediaStore.set(tabId,new Map());
-  const store=tabMediaStore.get(tabId);if(store.has(url))return;
+  const store=tabMediaStore.get(tabId);
+  // If URL already stored, only update thumbnail if we now have one
+  if(store.has(url)){
+    if(details.thumbnail){const ex=store.get(url);if(!ex.thumbnail){ex.thumbnail=details.thumbnail;persistTab(tabId);}}
+    return;
+  }
   const directUrl=type==='stream'?extractDirectUrl(url):null;
-  if(directUrl&&!store.has(directUrl)){store.set(directUrl,{url:directUrl,type:'video',fileName:getFileName(directUrl),mimeType:'video/mp4',size:0,sizeFormatted:'Unknown',timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:false,directUrl:null,ytdlpCommand:null,ffmpegCommand:null});}
-  store.set(url,{url,type,fileName:buildName(url,type,directUrl),mimeType:details.mimeType||'',size:details.size||0,sizeFormatted:type==='stream'?'HLS/DASH':(fmtBytes(details.size)||'Unknown'),timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:type==='stream',directUrl:directUrl||null,ytdlpCommand:`yt-dlp "${url}"`,ffmpegCommand:`ffmpeg -i "${url}" -c copy output.mp4`});
+  if(directUrl&&!store.has(directUrl)){store.set(directUrl,{url:directUrl,type:'video',fileName:getFileName(directUrl),mimeType:'video/mp4',size:0,sizeFormatted:'Unknown',timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:false,directUrl:null,thumbnail:null,ytdlpCommand:null,ffmpegCommand:null});}
+  store.set(url,{url,type,fileName:buildName(url,type,directUrl),mimeType:details.mimeType||'',size:details.size||0,sizeFormatted:type==='stream'?'HLS/DASH':(fmtBytes(details.size)||'Unknown'),timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:type==='stream',directUrl:directUrl||null,thumbnail:details.thumbnail||null,ytdlpCommand:`yt-dlp "${url}"`,ffmpegCommand:`ffmpeg -i "${url}" -c copy output.mp4`});
   updateBadge(tabId);persistTab(tabId);
 }
 function clearTab(tabId){tabMediaStore.delete(tabId);updateBadge(tabId);const key=`${TAB_MEDIA_KEY}_${tabId}`;chrome.storage.session.remove(key).catch(()=>chrome.storage.local.remove(key));}
@@ -296,7 +301,7 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
 
   if(msg.type==='CONTENT_MEDIA'){
     const tabId=sender.tab?.id??-1;
-    if(tabId>=0&&msg.items){for(const item of msg.items){addMedia(tabId,item.url,{mimeType:item.mimeType||'',size:0,pageUrl:item.pageUrl||'',});}}
+    if(tabId>=0&&msg.items){for(const item of msg.items){addMedia(tabId,item.url,{mimeType:item.mimeType||'',size:0,pageUrl:item.pageUrl||'',thumbnail:item.thumbnail||null});}}
     respond({success:true}); return true;
   }
 });
