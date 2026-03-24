@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stream Download Commands</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:       #0e0f14;
+      --card:     #161820;
+      --surface:  #1a1c24;
+      --hover:    #1e2029;
+      --accent:   #e05c1a;
+      --accent2:  #f0a050;
+      --accent-g: rgba(224,92,26,.15);
+      --txt:      #f0f0f4;
+      --txt2:     #8c8fa8;
+      --muted:    #565870;
+      --border:   rgba(255,255,255,.08);
+      --green:    #3dba7e;
+      --blue:     #4a9eff;
+      --purple:   #9b7fe8;
+      --red:      #e05c6a;
+      --r:        8px;
+      --rs:       5px;
+    }
+
+    * { margin:0; padding:0; box-sizing:border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--txt);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── HEADER ── */
+    .header {
+      padding: 16px 20px 14px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+    }
+    .header::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: .5;
+    }
+    .header-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 16px rgba(224,92,26,.25);
+      flex-shrink: 0;
+    }
+    .header-text h1 { font-size: 15px; font-weight: 600; }
+    .header-text p  { font-size: 11.5px; color: var(--txt2); margin-top: 1px; }
+
+    /* ── MAIN CONTENT ── */
+    .content { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 18px; }
+
+    /* ── FILE INFO ── */
+    .file-info {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .file-icon {
+      width: 38px; height: 38px; flex-shrink: 0;
+      background: rgba(155,127,232,.15);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    .file-name {
+      font-size: 13.5px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .file-url {
+      font-size: 10.5px; color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-top: 3px;
+    }
+    .stream-badge {
+      flex-shrink: 0;
+      padding: 2px 8px;
+      background: rgba(155,127,232,.2);
+      color: var(--purple);
+      border-radius: 4px;
+      font-size: 10px; font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    /* ── SECTION ── */
+    .section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+
+    .section-header {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .section-title {
+      font-size: 13px; font-weight: 600;
+    }
+    .section-sub {
+      font-size: 11px; color: var(--txt2);
+    }
+
+    /* ── COMMAND BLOCK ── */
+    .cmd-block {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .cmd-label {
+      font-size: 11px; font-weight: 600;
+      color: var(--txt2);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+
+    .cmd-row {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--rs);
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: border-color .15s;
+    }
+    .cmd-row:focus-within { border-color: rgba(224,92,26,.4); }
+
+    .cmd-text {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--accent2);
+      background: none;
+      border: none;
+      outline: none;
+      cursor: text;
+      word-break: break-all;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      resize: none;
+      min-height: 20px;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    .cmd-text::-webkit-scrollbar { width: 3px; }
+    .cmd-text::-webkit-scrollbar-thumb { background: var(--hover); border-radius: 3px; }
+
+    .copy-btn {
+      flex-shrink: 0;
+      padding: 8px 16px;
+      border-radius: var(--rs);
+      border: 1px solid var(--border);
+      background: var(--hover);
+      color: var(--txt2);
+      font-size: 12px; font-weight: 600;
+      cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+      transition: all .15s;
+      white-space: nowrap;
+      display: flex; align-items: center; gap: 5px;
+      min-width: 80px; justify-content: center;
+    }
+    .copy-btn:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .copy-btn.copied {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+    }
+
+    .cmd-hint {
+      font-size: 11px; color: var(--muted);
+      display: flex; align-items: center; gap: 6px;
+      flex-wrap: wrap;
+    }
+    .cmd-hint code {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      color: var(--accent2);
+    }
+    .cmd-hint a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+    .cmd-hint a:hover { text-decoration: underline; }
+
+    .section-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0 16px;
+    }
+
+    /* ── DIRECT URL SECTION (if available) ── */
+    .direct-section {
+      border-left: 3px solid var(--green);
+    }
+    .direct-section .section-header {
+      background: rgba(61,186,126,.05);
+    }
+    .direct-label {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 700;
+      color: var(--green);
+      background: rgba(61,186,126,.12);
+      border: 1px solid rgba(61,186,126,.25);
+      border-radius: 4px;
+      padding: 2px 7px;
+    }
+
+    /* ── EXPLANATION ── */
+    .explainer {
+      background: rgba(155,127,232,.07);
+      border: 1px solid rgba(155,127,232,.18);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      font-size: 12px;
+      color: var(--txt2);
+      line-height: 1.6;
+    }
+    .explainer strong { color: var(--txt); }
+    .explainer em { color: var(--accent2); font-style: normal; font-weight: 600; }
+
+    /* ── FOOTER ── */
+    .footer {
+      padding: 10px 20px;
+      background: var(--card);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .footer-logo { display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--txt2); }
+    .footer-logo span { color: var(--accent); }
+
+    /* ── HIDDEN until loaded ── */
+    #app { display: none; }
+    #loading {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 13px; gap: 10px;
+    }
+    .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #error-state {
+      display: none;
+      flex: 1; flex-direction: column; align-items: center; justify-content: center;
+      gap: 12px; text-align: center; padding: 40px;
+    }
+    #error-state .err-icon { font-size: 40px; opacity: .4; }
+    #error-state p { color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <span>Loading stream info…</span>
+</div>
+
+<div id="error-state">
+  <div class="err-icon">⚠️</div>
+  <p>No stream data found.<br>Close this window and try again from the extension.</p>
+</div>
+
+<div id="app">
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-icon">📡</div>
+    <div class="header-text">
+      <h1>Stream Download Commands</h1>
+      <p>Copy the command for your preferred download tool</p>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+
+    <!-- File info -->
+    <div class="file-info">
+      <div class="file-icon">📡</div>
+      <div style="flex:1;min-width:0;">
+        <div class="file-name" id="infoName">stream_file</div>
+        <div class="file-url" id="infoUrl"></div>
+      </div>
+      <div class="stream-badge">STREAM</div>
+    </div>
+
+    <!-- Direct URL (shown only if available) -->
+    <div class="section direct-section" id="directSection" style="display:none">
+      <div class="section-header">
+        <div>
+          <div class="section-title">📥 Direct MP4 Download</div>
+          <div class="section-sub">This URL may be directly downloadable — try this first</div>
+        </div>
+        <div class="direct-label">✓ Available</div>
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-row">
+          <textarea class="cmd-text" id="directUrl" readonly rows="1"></textarea>
+          <button class="copy-btn" data-target="directUrl">📋 Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- yt-dlp -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">🎬 yt-dlp</div>
+          <div class="section-sub">Best option — auto-selects highest quality, handles auth</div>
+        </div>
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-label">Terminal command</div>
+        <div class="cmd-row">
+          <textarea class="cmd-text" id="ytdlpCmd" readonly rows="2"></textarea>
+          <button class="copy-btn" data-target="ytdlpCmd">📋 Copy</button>
+        </div>
+        <div class="cmd-hint">
+          Install: <code>pip install yt-dlp</code>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/yt-dlp/yt-dlp" target="_blank">GitHub ↗</a>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/yt-dlp/yt-dlp/releases" target="_blank">Download binary ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ffmpeg -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">⚙ ffmpeg</div>
+          <div class="section-sub">Fetches all segments and merges into a single MP4</div>
+        </div>
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-label">Terminal command</div>
+        <div class="cmd-row">
+          <textarea class="cmd-text" id="ffmpegCmd" readonly rows="2"></textarea>
+          <button class="copy-btn" data-target="ffmpegCmd">📋 Copy</button>
+        </div>
+        <div class="cmd-hint">
+          Install: <a href="https://ffmpeg.org/download.html" target="_blank">ffmpeg.org ↗</a>
+          &nbsp;·&nbsp; Produces <code>output.mp4</code> in your current directory
+        </div>
+      </div>
+    </div>
+
+    <!-- Playlist URL -->
+    <div class="section">
+      <div class="section-header">
+        <div>
+          <div class="section-title">🔗 Playlist URL</div>
+          <div class="section-sub">Raw HLS/DASH manifest URL</div>
+        </div>
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-row">
+          <textarea class="cmd-text" id="playlistUrl" readonly rows="2"></textarea>
+          <button class="copy-btn" data-target="playlistUrl">📋 Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Explainer -->
+    <div class="explainer">
+      <strong>Why can't I just click Download?</strong><br>
+      HLS/DASH streams split the video into hundreds of short chunks. The URL above is the 
+      <em>playlist</em> — an index that lists all the chunks. Tools like <em>yt-dlp</em> and 
+      <em>ffmpeg</em> read the playlist, download every chunk, and stitch them into one clean file. 
+      If a direct MP4 URL was detected above, try that first — it may work without any extra tools.
+    </div>
+
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <div class="footer-logo">Media <span>DL</span>Helper</div>
+    <div>Keep this window open while you run your command</div>
+  </div>
+</div>
+
+<script src="commands.js"></script>
+</body>
+</html>

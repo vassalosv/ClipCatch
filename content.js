@@ -1,123 +1,133 @@
 // ============================
-// Media DownloadHelper - Content Script
+// Media DownloadHelper - Content Script v3
 // ============================
 
 (function () {
   'use strict';
 
-  // Avoid running multiple times
   if (window.__mediaDownloadHelperRunning) return;
   window.__mediaDownloadHelperRunning = true;
 
-  const MEDIA_EXTENSIONS = [
-    'mp4', 'webm', 'mkv', 'avi', 'mov', 'flv', 'wmv', 'mpeg', 'mpg', 'm4v',
-    'mp3', 'aac', 'ogg', 'flac', 'wav', 'm4a', 'opus', 'wma',
-    'm3u8', 'mpd', 'ts', 'f4v', 'f4a', '3gp', 'ogv'
-  ];
+  // ── ALLOWED media extensions (sent to background for further classification) ──
+  // NOTE: 'ts' is intentionally EXCLUDED — .ts files are HLS segments, not full videos.
+  //       .m3u8 and .mpd are the playlist URLs that represent the whole video.
+  const ALLOWED_EXTS = new Set([
+    // Video
+    'mp4', 'webm', 'mkv', 'avi', 'mov', 'flv', 'wmv', 'mpeg', 'mpg',
+    'm4v', 'f4v', '3gp', 'ogv', 'ogm',
+    // Audio
+    'mp3', 'aac', 'ogg', 'flac', 'wav', 'm4a', 'opus', 'wma', 'f4a',
+    // Stream playlists (single entry-point URL = whole video)
+    'm3u8', 'mpd'
+  ]);
 
-  function getExtension(url) {
+  // ── HARD DENY — never send these regardless of anything ──
+  const DENIED_EXTS = new Set([
+    'ts', 'fmp4', 'm4s', 'cmfv', 'cmfa',          // HLS/DASH segments
+    'webmanifest', 'manifest', 'appcache',          // Web app manifests
+    'json', 'xml', 'html', 'htm', 'css', 'js',     // Web resources
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg',    // Images
+    'woff', 'woff2', 'ttf', 'eot', 'otf',          // Fonts
+    'map', 'gz', 'zip', 'br', 'txt', 'pdf',        // Other
+    'ico', 'cur', 'bmp', 'tiff',
+  ]);
+
+  function getExt(url) {
     try {
-      const u = new URL(url, location.href);
-      const parts = u.pathname.split('.');
-      if (parts.length > 1) {
-        return parts[parts.length - 1].toLowerCase().split('?')[0];
-      }
+      const pathname = new URL(url, location.href).pathname;
+      const last = pathname.split('/').pop() || '';
+      const dot = last.lastIndexOf('.');
+      if (dot >= 0) return last.slice(dot + 1).toLowerCase().split('?')[0];
     } catch (e) {}
     return '';
   }
 
-  function isMediaUrl(url) {
-    if (!url || url.startsWith('data:') || url.startsWith('blob:')) return false;
-    const ext = getExtension(url);
-    return MEDIA_EXTENSIONS.includes(ext);
+  function resolveUrl(url) {
+    try { return new URL(url, location.href).href; } catch (e) { return url; }
   }
 
-  function resolveUrl(url) {
-    try {
-      return new URL(url, location.href).href;
-    } catch (e) {
-      return url;
-    }
+  function isAllowed(url) {
+    if (!url) return false;
+    const resolved = resolveUrl(url);
+    // Skip data URIs and blob URLs (can't download these externally)
+    if (resolved.startsWith('data:') || resolved.startsWith('blob:')) return false;
+    const ext = getExt(resolved);
+    if (DENIED_EXTS.has(ext)) return false;   // Hard deny first
+    if (ext && !ALLOWED_EXTS.has(ext)) return false; // Not a known media ext
+    return true;
   }
 
   function collectDomMedia() {
     const found = [];
     const seen = new Set();
 
-    function add(url, mimeType) {
-      const resolved = resolveUrl(url);
-      if (!seen.has(resolved) && isMediaUrl(resolved)) {
-        seen.add(resolved);
-        found.push({ url: resolved, mimeType: mimeType || '', pageUrl: location.href });
-      }
+    function add(rawUrl, mimeType) {
+      try {
+        const url = resolveUrl(rawUrl);
+        if (!seen.has(url) && isAllowed(url)) {
+          seen.add(url);
+          found.push({ url, mimeType: mimeType || '', pageUrl: location.href });
+        }
+      } catch (e) {}
     }
 
-    // <video> and <audio> elements
+    // <video> and <audio> src / currentSrc
     document.querySelectorAll('video, audio').forEach(el => {
-      if (el.src) add(el.src, el.type || '');
-      el.querySelectorAll('source').forEach(src => {
-        if (src.src) add(src.src, src.type || '');
-      });
-      // currentSrc
+      if (el.src)        add(el.src, el.type || '');
       if (el.currentSrc) add(el.currentSrc, '');
+      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || ''); });
     });
 
-    // <source> elements anywhere
-    document.querySelectorAll('source[src]').forEach(el => {
-      add(el.src, el.type || '');
-    });
+    // Standalone <source> elements
+    document.querySelectorAll('source[src]').forEach(el => add(el.src, el.type || ''));
 
-    // <a> links pointing to media files
+    // <a href> links — only if extension is explicitly in ALLOWED_EXTS
     document.querySelectorAll('a[href]').forEach(el => {
       const href = el.getAttribute('href');
-      if (href) add(href, '');
+      if (href) {
+        const ext = getExt(resolveUrl(href));
+        if (ALLOWED_EXTS.has(ext)) add(href, ''); // Must be explicitly allowed
+      }
     });
 
-    // meta og:video or og:audio
-    document.querySelectorAll('meta[property="og:video"], meta[property="og:audio"], meta[property="og:video:url"]').forEach(el => {
-      const content = el.getAttribute('content');
-      if (content) add(content, '');
+    // Open Graph video/audio meta tags
+    document.querySelectorAll(
+      'meta[property="og:video"], meta[property="og:audio"], meta[property="og:video:url"]'
+    ).forEach(el => {
+      const c = el.getAttribute('content');
+      if (c) add(c, '');
     });
 
     return found;
   }
 
-  function scanAndReport() {
+  function report() {
     const items = collectDomMedia();
     if (items.length > 0) {
-      chrome.runtime.sendMessage({
-        type: 'CONTENT_MEDIA',
-        items
-      }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'CONTENT_MEDIA', items }).catch(() => {});
     }
   }
 
-  // Initial scan after page load
+  // Initial scan
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', scanAndReport);
+    document.addEventListener('DOMContentLoaded', report);
   } else {
-    scanAndReport();
+    report();
   }
 
-  // Watch for dynamic content (e.g., lazy-loaded players)
-  const observer = new MutationObserver(() => {
-    scanAndReport();
-  });
+  // Watch for dynamically added players
+  const observer = new MutationObserver(report);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  observer.observe(document.body || document.documentElement, {
-    childList: true,
-    subtree: true
-  });
-
-  // Also scan when src attributes change on existing elements
+  // Catch lazy-loaded video sources
   document.addEventListener('loadedmetadata', (e) => {
     const el = e.target;
-    if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO')) {
-      if (el.currentSrc) {
-        const resolved = resolveUrl(el.currentSrc);
+    if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.currentSrc) {
+      const url = resolveUrl(el.currentSrc);
+      if (isAllowed(url)) {
         chrome.runtime.sendMessage({
           type: 'CONTENT_MEDIA',
-          items: [{ url: resolved, mimeType: '', pageUrl: location.href }]
+          items: [{ url, mimeType: '', pageUrl: location.href }]
         }).catch(() => {});
       }
     }
