@@ -30,6 +30,9 @@ const tabMediaStore   = new Map();
 const tabPageThumbs   = new Map(); // tabId -> best thumbnail captured from a <video> on that page
 const activeDownloads = new Map();
 const speedSamples    = new Map();
+const pendingHlsSaves = [];
+const hlsDownloadIds  = new Map();
+const HLS_BLOB_URL_PREFIX = `blob:chrome-extension://${chrome.runtime.id}/`;
 
 // ── HLS Job state (lives in background, populated via progress reports from offscreen) ──
 // jobId -> { id, url, fileName, state, segTotal, segDone, bytesDone, error, downloadId, startTime, speed, eta, … }
@@ -86,6 +89,47 @@ function fmtBytes(b) {
 }
 function fmtSpeed(bps){return bps>0?(fmtBytes(bps)||'')+'/s':'';}
 function fmtEta(left,bps){if(!bps||bps<=0||!left||left<=0)return '';const s=Math.round(left/bps);if(s<60)return`${s}s`;if(s<3600)return`${Math.floor(s/60)}m ${s%60}s`;return`${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;}
+function baseName(path){return(path||'').split(/[/\\]/).pop()||'';}
+function removePendingHlsSave(jobId){
+  for(let i=pendingHlsSaves.length-1;i>=0;i--){
+    if(pendingHlsSaves[i].jobId===jobId) pendingHlsSaves.splice(i,1);
+  }
+}
+function isLikelyHlsDownload(item){
+  const extPrefix=chrome.runtime.getURL('');
+  const urls=[item?.url,item?.finalUrl,item?.referrer].filter(Boolean);
+  return item?.byExtensionId===chrome.runtime.id || urls.some(url=>url.startsWith(HLS_BLOB_URL_PREFIX)||url.startsWith(extPrefix));
+}
+function matchPendingHlsSave(item){
+  if(!pendingHlsSaves.length||!isLikelyHlsDownload(item)) return null;
+  const itemName=baseName(item.filename);
+  let idx=-1;
+  if(itemName) idx=pendingHlsSaves.findIndex(entry=>baseName(entry.fileName)===itemName);
+  if(idx<0) idx=0;
+  const [entry]=pendingHlsSaves.splice(idx,1);
+  return entry||null;
+}
+function attachHlsDownload(jobId,item,fallbackFileName=''){
+  const job=hlsJobs.get(jobId);
+  if(!job) return;
+  job.downloadId=item.id;
+  job.downloadState=item.state||'in_progress';
+  job.fileName=baseName(item.filename||fallbackFileName||job.fileName);
+  hlsDownloadIds.set(item.id,jobId);
+  if(job.downloadState==='complete'){
+    job.state='complete';
+    job.stateLabel='Complete';
+    maybeCloseOffscreen();
+  }else if(job.state!=='cancelled'&&job.state!=='error'){
+    job.state='saving';
+    job.stateLabel='Saving file…';
+  }
+  broadcastHLSJobs();
+}
+function cleanupHlsTracking(jobId,downloadId=null){
+  removePendingHlsSave(jobId);
+  if(downloadId!=null) hlsDownloadIds.delete(downloadId);
+}
 
 // ── HLS job broadcasting ───────────────────────────────────────────────────
 function hlsStateLabel(j) {
@@ -109,7 +153,7 @@ function broadcastHLSJobs() {
     id:j.id, url:j.url, fileName:j.fileName, state:j.state,
     segTotal:j.segTotal||0, segDone:j.segDone||0,
     bytesDone:j.bytesDone||0,
-    error:j.error||null, downloadId:j.downloadId||null, startTime:j.startTime,
+    error:j.error||null, downloadId:j.downloadId||null, downloadState:j.downloadState||null, startTime:j.startTime,
     progress:j.segTotal>0?Math.round((j.segDone/j.segTotal)*100):-1,
     bytesDoneFmt:fmtBytes(j.bytesDone)||'0 B',
     speed:j.speed||0, speedFmt:fmtSpeed(j.speed||0), eta:j.eta||'',
@@ -128,23 +172,55 @@ function calcSpeed(id){const s=speedSamples.get(id);if(!s||s.length<2)return 0;c
 
 // onCreated fires for ALL Chrome downloads — ignore any we didn't start
 chrome.downloads.onCreated.addListener((item)=>{
-  if(!ourDownloadIds.has(item.id)) return;
-  const dl=activeDownloads.get(item.id);
-  if(dl){dl.totalBytes=item.totalBytes||0; activeDownloads.set(item.id,dl); broadcastDownloads();}
+  if(ourDownloadIds.has(item.id)){
+    const dl=activeDownloads.get(item.id);
+    if(dl){dl.totalBytes=item.totalBytes||0; activeDownloads.set(item.id,dl); broadcastDownloads();}
+    return;
+  }
+
+  const pending=matchPendingHlsSave(item);
+  if(pending) attachHlsDownload(pending.jobId,item,pending.fileName);
 });
 
 chrome.downloads.onChanged.addListener((delta)=>{
   const id=delta.id;
-  if(!activeDownloads.has(id)) return; // ignore downloads not started by us
-  const dl=activeDownloads.get(id);
-  if(delta.bytesReceived){dl.bytesReceived=delta.bytesReceived.current;recordSample(id,dl.bytesReceived);dl.speed=calcSpeed(id);}
-  if(delta.totalBytes) dl.totalBytes=delta.totalBytes.current;
-  if(delta.filename)   dl.fileName=delta.filename.current||dl.fileName;
-  if(delta.paused)     dl.paused=delta.paused.current;
-  if(delta.error)      dl.error=delta.error.current;
-  if(delta.state){dl.state=delta.state.current;if(dl.state==='complete'){dl.progress=100;dl.speed=0;dl.eta='';speedSamples.delete(id);}if(dl.state==='interrupted')speedSamples.delete(id);}
-  if(dl.totalBytes>0){dl.progress=Math.round((dl.bytesReceived/dl.totalBytes)*100);dl.eta=fmtEta(dl.totalBytes-dl.bytesReceived,dl.speed);}else{dl.progress=-1;dl.eta='';}
-  activeDownloads.set(id,dl); broadcastDownloads();
+  if(activeDownloads.has(id)){
+    const dl=activeDownloads.get(id);
+    if(delta.bytesReceived){dl.bytesReceived=delta.bytesReceived.current;recordSample(id,dl.bytesReceived);dl.speed=calcSpeed(id);}
+    if(delta.totalBytes) dl.totalBytes=delta.totalBytes.current;
+    if(delta.filename)   dl.fileName=delta.filename.current||dl.fileName;
+    if(delta.paused)     dl.paused=delta.paused.current;
+    if(delta.error)      dl.error=delta.error.current;
+    if(delta.state){dl.state=delta.state.current;if(dl.state==='complete'){dl.progress=100;dl.speed=0;dl.eta='';speedSamples.delete(id);}if(dl.state==='interrupted')speedSamples.delete(id);}
+    if(dl.totalBytes>0){dl.progress=Math.round((dl.bytesReceived/dl.totalBytes)*100);dl.eta=fmtEta(dl.totalBytes-dl.bytesReceived,dl.speed);}else{dl.progress=-1;dl.eta='';}
+    activeDownloads.set(id,dl);
+    broadcastDownloads();
+  }
+
+  const jobId=hlsDownloadIds.get(id);
+  if(!jobId) return;
+  const job=hlsJobs.get(jobId);
+  if(!job) return;
+
+  if(delta.filename) job.fileName=baseName(delta.filename.current||job.fileName);
+  if(delta.error&&job.downloadState!=='complete') job.error=delta.error.current;
+  if(delta.state){
+    job.downloadState=delta.state.current;
+    if(job.downloadState==='complete'){
+      job.state='complete';
+      job.stateLabel='Complete';
+      maybeCloseOffscreen();
+    }else if(job.downloadState==='interrupted'){
+      job.state='error';
+      job.error=job.error||'Browser download interrupted';
+      maybeCloseOffscreen();
+    }else if(job.state!=='cancelled'&&job.state!=='error'){
+      job.state='saving';
+      job.stateLabel='Saving file…';
+    }
+  }
+  hlsJobs.set(jobId,job);
+  broadcastHLSJobs();
 });
 
 // Poll only the specific IDs we own — never query all in-progress downloads
@@ -226,12 +302,36 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
     if(job){
       Object.assign(job, msg);   // merge all progress fields
       delete job.type;
+      const waitingForBrowserSave =
+        pendingHlsSaves.some(entry=>entry.jobId===job.id) ||
+        (job.downloadId!=null && job.downloadState!=='complete');
+      if(msg.state==='complete' && waitingForBrowserSave){
+        job.state='saving';
+        job.stateLabel='Saving file…';
+      }
       broadcastHLSJobs();
       if(job.state==='complete'||job.state==='error'||job.state==='cancelled'){
         maybeCloseOffscreen();
       }
     }
     respond({success:true}); return true;
+  }
+
+  if(msg.type==='HLS_SAVE_STARTED'){
+    const job=hlsJobs.get(msg.jobId);
+    if(job){
+      removePendingHlsSave(msg.jobId);
+      pendingHlsSaves.push({jobId:msg.jobId,fileName:msg.fileName||job.fileName,startedAt:Date.now()});
+      job.fileName=baseName(msg.fileName||job.fileName);
+      job.downloadState='in_progress';
+      job.state='saving';
+      job.stateLabel='Saving file…';
+      broadcastHLSJobs();
+      respond({success:true});
+    }else{
+      respond({success:false});
+    }
+    return true;
   }
 
   if(msg.type==='GET_MEDIA'){const store=tabMediaStore.get(msg.tabId);respond({media:store?[...store.values()]:[]});return true;}
@@ -271,7 +371,9 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
   if(msg.type==='CANCEL_HLS'){
     const job=hlsJobs.get(msg.jobId);
     if(job){
-      job.state='cancelled'; broadcastHLSJobs();
+      job.state='cancelled';
+      cleanupHlsTracking(msg.jobId,job.downloadId);
+      broadcastHLSJobs();
       // Tell offscreen to abort
       chrome.runtime.sendMessage({type:'CANCEL_HLS_JOB',jobId:msg.jobId}).catch(()=>{});
       maybeCloseOffscreen();
@@ -324,7 +426,7 @@ chrome.tabs.onUpdated.addListener((tabId,changeInfo)=>{if(changeInfo.status==='l
 chrome.tabs.onRemoved.addListener((tabId)=>{clearTab(tabId);const key=`${TAB_MEDIA_KEY}_${tabId}`;chrome.storage.session.remove(key).catch(()=>chrome.storage.local.remove(key));});
 
 // Cleanup old finished jobs after 2min
-setInterval(()=>{const now=Date.now();for(const[id,j]of hlsJobs){if((j.state==='complete'||j.state==='error'||j.state==='cancelled')&&(now-j.startTime>120000))hlsJobs.delete(id);}},60000);
+setInterval(()=>{const now=Date.now();for(const[id,j]of hlsJobs){if((j.state==='complete'||j.state==='error'||j.state==='cancelled')&&(now-j.startTime>120000)){cleanupHlsTracking(id,j.downloadId);hlsJobs.delete(id);}}},60000);
 setInterval(()=>{const now=Date.now();for(const[id,dl]of activeDownloads){if((dl.state==='complete'||dl.state==='interrupted')&&(now-dl.startTime>60000)){activeDownloads.delete(id);speedSamples.delete(id);}}},30000);
 
 console.log('[ClipCatch] — offscreen HLS assembly engine ready.');

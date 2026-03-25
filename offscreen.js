@@ -286,6 +286,7 @@ async function runJob(jobId, url, fileName) {
 
     // Anchor-click download: works in any DOM context (including offscreen docs)
     // without needing chrome.downloads or cross-context blob access.
+    await chrome.runtime.sendMessage({ type:'HLS_SAVE_STARTED', jobId, fileName: outName }).catch(()=>{});
     const a = document.createElement('a');
     a.href     = blobUrl;
     a.download = outName;

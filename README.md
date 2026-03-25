@@ -16,7 +16,7 @@ A powerful Chrome extension to detect and download video, audio, and streaming m
 - **Built-in HLS/DASH assembler**: Downloads and stitches `.m3u8` / `.mpd` streams directly in the browser — no yt-dlp or ffmpeg needed
 - **MP4 output by default**: Assembled streams are saved as `.mp4` — fMP4/ISOBMFF segments are packaged directly; MPEG-TS segments are remuxed via the built-in remuxer
 - **Retry with backoff**: Segment fetches automatically retry on 429/5xx errors
-- **Download tracking panel**: Monitor active downloads and HLS assembly jobs with progress, speed, and ETA
+- **Download tracking panel**: Monitor active downloads and HLS assembly jobs with progress, speed, ETA, and one-click open file / open folder actions after completion
 - **Stream Commands window**: Displays ready-to-use `yt-dlp` / `ffmpeg` commands for streams that require external tools
 - **Cancel in-flight jobs**: Stop any active HLS assembly or download mid-flight
 - **Video thumbnails**: Popup shows a live screenshot from the page's `<video>` element as each item's icon — works for both DOM-detected videos and network-intercepted HLS/DASH streams
@@ -54,7 +54,7 @@ A powerful Chrome extension to detect and download video, audio, and streaming m
 5. Use **Select All** to download everything at once
 6. Use **Scan Page Now** to force a rescan if nothing appeared
 7. For HLS/DASH streams, ClipCatch will assemble them in-browser and save as a single file
-8. Check the **Downloads panel** (bottom tab) to monitor progress
+8. Check the **Downloads panel** (bottom tab) to monitor progress, then open the finished file or reveal it in its folder
 
 ---
 
@@ -92,9 +92,17 @@ MIT License — free for personal and educational use.
 
 ## Changelog
 
+### v0.7.2 — 2026-03-26
+- **New:** Completed download rows now expose one-click actions to open the downloaded file with its default app or reveal it in its folder
+- **Improved:** Built-in HLS/DASH saves are now linked to their browser download entries, so completed stream jobs offer the same post-download actions as direct file downloads
+- **Fixed:** Stream jobs stay in `Saving file…` until Chrome finishes registering the saved file, avoiding premature completion states
+- **Updated:** Bumped the extension version to `0.7.2` in the manifest and popup UI
+
 ### v0.7.1 — 2026-03-24
-- Replaced dynamic hostname in popup footer with a static **"ClipCatch on Github.com"** link pointing to the repository
-- Removed unused `footerTabInfo` element and hostname-detection code from `popup.js`
+- **New:** Added a permanent **"ClipCatch on Github.com"** link in the popup footer for quick access to the repository
+- **Improved:** Thumbnail capture is more resilient for streamed media — ClipCatch now falls back to a video's poster image when canvas capture is blocked and retries on the first playback update to grab a real frame when available
+- **Fixed:** Removed unused popup footer hostname logic and related DOM wiring, eliminating hostname parsing edge cases and simplifying popup initialization
+- **Updated:** Bumped the extension version to `0.7.1` in the manifest and popup UI
 
 ### v0.7 — 2026-03-24
 - **Page-level thumbnail channel**: introduced `PAGE_THUMB` message so HLS/DASH stream items (detected via network requests, not DOM) also receive a visual preview — `content.js` captures the first usable frame from any `<video>` on the page and broadcasts it; `background.js` back-fills it onto all existing items in that tab that have no thumbnail yet
