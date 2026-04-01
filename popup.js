@@ -22,6 +22,7 @@ const selectAllBtn = $('selectAllBtn');
 const selectCount  = $('selectCount');
 const dlSelBtn     = $('downloadSelectedBtn');
 const toastWrap    = $('toastContainer');
+const footerTab    = $('footerTabInfo');
 const dlPanelList  = $('downloadPanelList');
 const dlPanelBadge = $('dlPanelBadge');
 
@@ -58,22 +59,6 @@ function copyText(text,label){
   navigator.clipboard.writeText(text)
     .then(()=>showToast(`📋 ${label} copied`,'success'))
     .catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast(`📋 ${label} copied`,'success');});
-}
-function openDownloadedFolder(downloadId){
-  try{
-    chrome.downloads.show(downloadId);
-    showToast('📂 Opened download folder','success');
-  }catch(e){
-    showToast('⚠ Could not open download folder','info');
-  }
-}
-function openDownloadedFile(downloadId){
-  try{
-    chrome.downloads.open(downloadId);
-    showToast('📄 Opening file…','success');
-  }catch(e){
-    showToast('⚠ Could not open downloaded file','info');
-  }
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────
@@ -117,12 +102,9 @@ function createItem(item){
     actionBtns=`<button class="action-btn download-btn" title="Download">⬇</button>`;
   }
 
-  const iconContent = item.thumbnail
-    ? `<img class="item-thumb" src='${item.thumbnail}' alt="" onerror="this.style.display='none'">`
-    : meta.icon;
   div.innerHTML=`
     <div class="item-checkbox">${selectedUrls.has(item.url)?'✓':''}</div>
-    <div class="item-type-icon">${iconContent}</div>
+    <div class="item-type-icon">${meta.icon}</div>
     <div class="item-info">
       <div class="item-name" title="${esc(item.fileName)}">${esc(item.fileName)}</div>
       <div class="item-meta">
@@ -303,13 +285,11 @@ function createHLSRow(job){
   div.dataset.jobId=job.id;
 
   const isActive=['downloading','fetching','merging','saving'].includes(job.state);
-  const canCancel=['downloading','fetching','merging'].includes(job.state)||(job.state==='saving'&&typeof job.downloadId!=='number');
   const pct=job.progress>=0?job.progress:null;
   const indet=job.progress<0&&isActive;
 
   const icons={fetching:'🔍',downloading:'📡',merging:'🔧',saving:'💾',complete:'✅',error:'❌',cancelled:'⛔'};
   const icon=icons[job.state]||'📡';
-  const canOpenSaved=job.state==='complete'&&typeof job.downloadId==='number';
 
   const bar = isActive ? `
     <div class="hls-progress-track">
@@ -339,10 +319,8 @@ function createHLSRow(job){
       </div>
       <div class="hls-controls">
         <span class="hls-type-badge">HLS</span>
-        ${canCancel?`<button class="dl-btn dl-btn-cancel" data-action="cancel-hls" data-id="${esc(job.id)}" title="Cancel">✕</button>`:''}
-        ${canOpenSaved?`<button class="dl-btn" data-action="open-file" data-id="${job.downloadId}" title="Open downloaded file">📄</button>`:''}
-        ${canOpenSaved?`<button class="dl-btn" data-action="open-folder" data-id="${job.downloadId}" title="Open downloaded folder">📂</button>`:''}
-        ${job.state==='complete'&&!canOpenSaved?`<span style="font-size:11px;color:var(--green);padding:0 4px">✓ Saved</span>`:''}
+        ${isActive?`<button class="dl-btn dl-btn-cancel" data-action="cancel-hls" data-id="${esc(job.id)}" title="Cancel">✕</button>`:''}
+        ${job.state==='complete'?`<span style="font-size:11px;color:var(--green);padding:0 4px">✓ Saved</span>`:''}
       </div>
     </div>
     ${bar}
@@ -353,8 +331,7 @@ function createHLSRow(job){
       e.stopPropagation();
       const action=btn.dataset.action;
       if(action==='cancel-hls') chrome.runtime.sendMessage({type:'CANCEL_HLS',jobId:btn.dataset.id},()=>fetchAllProgress());
-      if(action==='open-file')  openDownloadedFile(parseInt(btn.dataset.id,10));
-      if(action==='open-folder')openDownloadedFolder(parseInt(btn.dataset.id,10));
+      if(action==='show-dl')    chrome.runtime.sendMessage({type:'SHOW_DOWNLOAD',downloadId:parseInt(btn.dataset.id,10)});
     });
   });
 
@@ -385,8 +362,7 @@ function createDLRow(dl){
         ${dl.state==='in_progress'&&!dl.paused?`<button class="dl-btn" data-action="pause" data-id="${dl.id}" title="Pause">⏸</button>`:''}
         ${dl.state==='in_progress'&& dl.paused?`<button class="dl-btn" data-action="resume" data-id="${dl.id}" title="Resume">▶</button>`:''}
         ${dl.state==='in_progress'?`<button class="dl-btn dl-btn-cancel" data-action="cancel" data-id="${dl.id}" title="Cancel">✕</button>`:''}
-        ${dl.state==='complete'?`<button class="dl-btn" data-action="open-file" data-id="${dl.id}" title="Open downloaded file">📄</button>`:''}
-        ${dl.state==='complete'?`<button class="dl-btn" data-action="open-folder" data-id="${dl.id}" title="Open downloaded folder">📂</button>`:''}
+        ${dl.state==='complete'?`<button class="dl-btn" data-action="show" data-id="${dl.id}" title="Show in folder">📁</button>`:''}
       </div>
     </div>
     ${bar}${meta}`;
@@ -398,8 +374,7 @@ function createDLRow(dl){
       if(action==='pause')  chrome.runtime.sendMessage({type:'PAUSE_DOWNLOAD',downloadId:id});
       if(action==='resume') chrome.runtime.sendMessage({type:'RESUME_DOWNLOAD',downloadId:id});
       if(action==='cancel') chrome.runtime.sendMessage({type:'CANCEL_DOWNLOAD',downloadId:id},()=>fetchAllProgress());
-      if(action==='open-file')   openDownloadedFile(id);
-      if(action==='open-folder') openDownloadedFolder(id);
+      if(action==='show')   chrome.runtime.sendMessage({type:'SHOW_DOWNLOAD',downloadId:id});
     });
   });
   return div;
@@ -471,7 +446,7 @@ window.addEventListener('unload',()=>{if(mediaPoller)clearInterval(mediaPoller);
 async function init(){
   try{
     const[tab]=await chrome.tabs.query({active:true,currentWindow:true});
-    if(tab){currentTabId=tab.id;}
+    if(tab){currentTabId=tab.id;try{footerTab.textContent=new URL(tab.url||'').hostname;}catch{footerTab.textContent='Current tab';}}
   }catch(e){}
   loadMedia();
   fetchAllProgressLoop();

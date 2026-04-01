@@ -63,18 +63,6 @@ async function fetchBuffer(url, signal, attempt = 0) {
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// ── Detect segment container format from first few bytes ───────────────────
-function detectSegmentFormat(data) {
-  // data: Uint8Array (the full merged buffer)
-  if (data.length < 8) return 'unknown';
-  // MPEG-TS: every packet starts with sync byte 0x47 (188 bytes/packet)
-  if (data[0] === 0x47) return 'ts';
-  // ISO BMFF / fragmented MP4: 4-byte size field followed by a 4-char box type
-  const boxType = String.fromCharCode(data[4], data[5], data[6], data[7]);
-  if (['ftyp','moov','mdat','moof','styp','sidx','emsg','free'].includes(boxType)) return 'fmp4';
-  return 'unknown';
-}
-
 // ── Playlist parsers ───────────────────────────────────────────────────────
 function isMasterPlaylist(text) {
   return text.includes('#EXT-X-STREAM-INF') || text.includes('#EXT-X-MEDIA:');
@@ -228,75 +216,85 @@ async function runJob(jobId, url, fileName) {
     for (let i = 0; i < buffers.length; i++) buffers[i] = null;
     buffers.length = 0;
 
-    // ── Step 4: Package as MP4 ────────────────────────────────────────────
-    // Strip "(stream)" suffix and any existing media extension, then add .mp4.
+    // ── Step 4: Remux TS → MP4 ────────────────────────────────────────────
+    // Build clean output filename: strip "(stream)" suffix AND any media extension,
+    // then append .mp4 (always — players detect container format from content, not extension).
     // e.g. "tt26443597GR.mp4 (stream)" → "tt26443597GR" → "tt26443597GR.mp4"
     const cleanName = fileName
       .replace(/\s*\(stream\)\s*/gi, '')
       .replace(/\.(mp4|mkv|avi|mov|webm|m3u8|mpd|ts|flv|wmv)$/i, '');
-    let outName    = cleanName + '.mp4';
-    let outMime    = 'video/mp4';
+    let outName   = cleanName + '.mp4';
+    let outMime   = 'video/mp4';
     let outputData = null; // Uint8Array — declared let so we can free it
 
-    // Detect whether segments are fragmented MP4 (fMP4/ISOBMFF) or classic MPEG-TS.
-    // fMP4 segments can be concatenated directly as a valid fragmented MP4.
-    // TS segments need remuxing into an MP4 container.
-    const segFormat = detectSegmentFormat(merged);
+    report(jobId, { state:'merging', segDone, segTotal, bytesDone, progress:100, stateLabel:'Remuxing to MP4…' });
 
-    if (segFormat === 'fmp4') {
-      // Segments are already fragmented MP4 — concatenation is a valid MP4 file
-      report(jobId, { state:'merging', segDone, segTotal, bytesDone, progress:100, stateLabel:'Packaging fMP4…' });
-      outputData = merged;
-      merged     = null;
-    } else {
-      report(jobId, { state:'merging', segDone, segTotal, bytesDone, progress:100, stateLabel:'Remuxing to MP4…' });
-      // Only attempt in-memory remux for files under 600 MB to avoid OOM.
-      const REMUX_SIZE_LIMIT = 600 * 1024 * 1024;
-      if (typeof remuxTStoMP4 === 'function' && totalSize <= REMUX_SIZE_LIMIT) {
-        try {
-          outputData = remuxTStoMP4(merged.buffer);
-          merged.fill(0); // free TS buffer — MP4 data is now in outputData
-        } catch (remuxErr) {
-          console.warn('[ClipCatch] Remux failed, saving as .ts:', remuxErr.message);
-          outputData = merged;
-          merged     = null;
-          outName    = cleanName + '.ts';
-          outMime    = 'video/mp2t';
-        }
-      } else {
-        // Too large to remux in-memory, or remux unavailable — save raw TS
+    // Only attempt remux for files under 600 MB to avoid OOM on large streams.
+    // Above that threshold save the raw TS data with a .mp4 extension —
+    // VLC/MPC-HC/mpv/ffmpeg detect the container from content headers, not the extension.
+    const REMUX_SIZE_LIMIT = 600 * 1024 * 1024;
+    if (typeof remuxTStoMP4 === 'function' && totalSize <= REMUX_SIZE_LIMIT) {
+      try {
+        // remuxTStoMP4 returns a Uint8Array — use it directly (NOT .buffer which may be oversized)
+        outputData = remuxTStoMP4(merged.buffer);
+        // *** Free the TS buffer immediately — MP4 data is now in outputData ***
+        // This keeps peak memory at ~1× file size instead of ~2×
+        merged.fill(0); // overwrite to release references held by remux internals
+      } catch (remuxErr) {
+        console.warn('[ClipCatch] Remux failed, saving raw stream as .mp4:', remuxErr.message);
         outputData = merged;
-        outName    = cleanName + '.ts';
-        outMime    = 'video/mp2t';
+        merged     = null;
+        // Keep .mp4 extension — players (VLC, mpv, Chrome) detect the container
+        // format from content headers, not the file extension.
       }
+    } else {
+      // Too large to remux in-memory, or remux unavailable — save raw stream
+      outputData = merged;
+      // Keep .mp4 extension for consistency
     }
 
     // ── Step 5: Save ──────────────────────────────────────────────────────
-    // IMPORTANT: blob URLs are context-local — a blob created here cannot be
-    // read by the background service worker (different JS context).
-    // Instead we use an <a download> click directly in this offscreen document,
-    // which is a real DOM page and can trigger downloads without a user gesture.
+    // chrome.downloads is unavailable in offscreen documents, and anchor clicks
+    // without a user gesture are silently ignored. Data URLs sent via
+    // sendMessage hit Chrome's ~64 MB IPC limit on real-world streams.
+    // Solution: write the Blob into shared IndexedDB (same extension origin =
+    // same DB), then send a tiny message so the background service worker can
+    // read it back, create a local blob URL, and call chrome.downloads.
     report(jobId, { state:'saving', segDone, segTotal, bytesDone, progress:100, stateLabel:'Saving file…' });
 
-    const blob    = new Blob([outputData], { type: outMime });
-    const blobUrl = URL.createObjectURL(blob);
+    const blob = new Blob([outputData], { type: outMime });
+    outputData = null; // free immediately — Blob holds its own copy
 
-    // Free outputData immediately — the Blob holds its own copy
-    outputData = null;
+    // Deadlock: offscreen docs have URL.createObjectURL but no chrome.downloads;
+    // service workers have chrome.downloads but no URL.createObjectURL;
+    // sendMessage has a ~64 MB IPC cap (too small for real streams);
+    // chrome.downloads rejects data URLs entirely.
+    //
+    // Solution: store the raw Blob in shared IndexedDB (same extension origin),
+    // then ask the background to open saver.html — a regular extension page that
+    // has BOTH URL.createObjectURL and chrome.downloads. Only the job ID travels
+    // over IPC; the Blob never leaves IndexedDB until saver.js reads it locally.
+    await new Promise((resolve, reject) => {
+      const req = indexedDB.open('clipcatch_transfers', 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore('transfers');
+      req.onerror   = () => reject(new Error('IndexedDB open failed'));
+      req.onsuccess = e => {
+        const db = e.target.result;
+        const tx = db.transaction('transfers', 'readwrite');
+        tx.objectStore('transfers').put({ blob, filename: outName }, jobId);
+        tx.oncomplete = resolve;
+        tx.onerror    = () => reject(tx.error);
+      };
+    });
 
-    // Anchor-click download: works in any DOM context (including offscreen docs)
-    // without needing chrome.downloads or cross-context blob access.
-    await chrome.runtime.sendMessage({ type:'HLS_SAVE_STARTED', jobId, fileName: outName }).catch(()=>{});
-    const a = document.createElement('a');
-    a.href     = blobUrl;
-    a.download = outName;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-
-    // Revoke after Chrome has had time to start reading the blob
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 120_000);
+    // Lightweight trigger — only the job ID crosses the IPC boundary
+    await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: 'SAVE_HLS_FILE', jobId }, (resp) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else if (!resp?.success)      reject(new Error(resp?.error || 'Save failed'));
+        else                          resolve();
+      });
+    });
 
     activeJobs.delete(jobId);
     report(jobId, {

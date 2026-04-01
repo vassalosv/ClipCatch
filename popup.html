@@ -80,8 +80,7 @@
     .media-item.selected::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--accent);}
     .item-checkbox{margin-top:2px;width:14px;height:14px;border:1.5px solid var(--border);border-radius:3px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:var(--accent);}
     .media-item.selected .item-checkbox{background:var(--accent);border-color:var(--accent);color:#fff;}
-    .item-type-icon{width:34px;height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;overflow:hidden;}
-    .item-thumb{width:34px;height:34px;object-fit:cover;border-radius:5px;display:block;}
+    .item-type-icon{width:34px;height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;}
     .type-video .item-type-icon{background:rgba(224,92,26,.15);}
     .type-audio .item-type-icon{background:rgba(74,158,255,.15);}
     .type-stream .item-type-icon{background:rgba(155,127,232,.15);}
@@ -187,8 +186,6 @@
     /* FOOTER */
     .footer{padding:7px 16px;background:var(--card);border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
     .footer-left{font-size:11px;color:var(--muted);}
-    .footer-left a{color:var(--muted);text-decoration:none;transition:color .15s;}
-    .footer-left a:hover{color:var(--accent);}
     .footer-right{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;}
   </style>
 </head>
@@ -263,8 +260,8 @@
 <div class="toast-container" id="toastContainer"></div>
 
 <div class="footer">
-  <div class="footer-left"><a href="https://github.com/vassalosv/ClipCatch" target="_blank">ClipCatch on Github.com</a></div>
-  <div class="footer-right">v0.7.2</div>
+  <div class="footer-left" id="footerTabInfo">Current tab</div>
+  <div class="footer-right">v6.0.0</div>
 </div>
 
 <script src="popup.js"></script>

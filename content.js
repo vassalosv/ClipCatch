@@ -46,21 +46,6 @@
     try { return new URL(url, location.href).href; } catch (e) { return url; }
   }
 
-  function captureVideoThumb(el) {
-    // 1. Try canvas — works for same-origin / non-tainted video
-    try {
-      if (el.readyState >= 2 && el.videoWidth > 0 && el.videoHeight > 0) {
-        const W = 80, H = Math.round(W * el.videoHeight / el.videoWidth) || 45;
-        const canvas = document.createElement('canvas');
-        canvas.width = W; canvas.height = H;
-        canvas.getContext('2d').drawImage(el, 0, 0, W, H);
-        return canvas.toDataURL('image/jpeg', 0.65); // throws SecurityError if tainted
-      }
-    } catch (e) {} // cross-origin canvas taint — fall through
-    // 2. Fall back to poster attribute (set by virtually every streaming player)
-    return el.poster || null;
-  }
-
   function isAllowed(url) {
     if (!url) return false;
     const resolved = resolveUrl(url);
@@ -76,22 +61,21 @@
     const found = [];
     const seen = new Set();
 
-    function add(rawUrl, mimeType, thumbnail) {
+    function add(rawUrl, mimeType) {
       try {
         const url = resolveUrl(rawUrl);
         if (!seen.has(url) && isAllowed(url)) {
           seen.add(url);
-          found.push({ url, mimeType: mimeType || '', pageUrl: location.href, thumbnail: thumbnail || null });
+          found.push({ url, mimeType: mimeType || '', pageUrl: location.href });
         }
       } catch (e) {}
     }
 
     // <video> and <audio> src / currentSrc
     document.querySelectorAll('video, audio').forEach(el => {
-      const thumb = el.tagName === 'VIDEO' ? captureVideoThumb(el) : null;
-      if (el.src)        add(el.src, el.type || '', thumb);
-      if (el.currentSrc) add(el.currentSrc, '', thumb);
-      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || '', thumb); });
+      if (el.src)        add(el.src, el.type || '');
+      if (el.currentSrc) add(el.currentSrc, '');
+      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || ''); });
     });
 
     // Standalone <source> elements
@@ -122,20 +106,6 @@
     if (items.length > 0) {
       chrome.runtime.sendMessage({ type: 'CONTENT_MEDIA', items }).catch(() => {});
     }
-    // Also broadcast the best available video thumbnail for this page so that
-    // stream items detected via network requests can get a visual preview.
-    reportPageThumb();
-  }
-
-  function reportPageThumb() {
-    const videos = document.querySelectorAll('video');
-    for (const el of videos) {
-      const thumb = captureVideoThumb(el);
-      if (thumb) {
-        chrome.runtime.sendMessage({ type: 'PAGE_THUMB', thumbnail: thumb }).catch(() => {});
-        return; // first usable frame is enough
-      }
-    }
   }
 
   // Initial scan
@@ -149,34 +119,18 @@
   const observer = new MutationObserver(report);
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  // Capture a real playing frame on first timeupdate (fires when video is actually rendering)
-  const capturedEls = new WeakSet();
-  document.addEventListener('timeupdate', (e) => {
+  // Catch lazy-loaded video sources
+  document.addEventListener('loadedmetadata', (e) => {
     const el = e.target;
-    if (!el || el.tagName !== 'VIDEO' || capturedEls.has(el)) return;
-    const thumb = captureVideoThumb(el);
-    if (thumb) {
-      capturedEls.add(el);
-      chrome.runtime.sendMessage({ type: 'PAGE_THUMB', thumbnail: thumb }).catch(() => {});
-    }
-  }, true);
-
-  // Catch lazy-loaded video sources and capture thumbnail once first frame loads
-  document.addEventListener('loadeddata', (e) => {
-    const el = e.target;
-    if (!el || (el.tagName !== 'VIDEO' && el.tagName !== 'AUDIO')) return;
-    if (el.currentSrc) {
+    if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.currentSrc) {
       const url = resolveUrl(el.currentSrc);
       if (isAllowed(url)) {
-        const thumbnail = el.tagName === 'VIDEO' ? captureVideoThumb(el) : null;
         chrome.runtime.sendMessage({
           type: 'CONTENT_MEDIA',
-          items: [{ url, mimeType: '', pageUrl: location.href, thumbnail }]
+          items: [{ url, mimeType: '', pageUrl: location.href }]
         }).catch(() => {});
       }
     }
-    // Always try to update the page-level thumb (covers blob/MSE streams)
-    if (el.tagName === 'VIDEO') reportPageThumb();
   }, true);
 
 })();
