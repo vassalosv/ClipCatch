@@ -27,6 +27,7 @@ const STREAM_PLAYLIST_MIME = [
 
 const TAB_MEDIA_KEY   = 'tabMedia';
 const tabMediaStore   = new Map();
+const tabTitleStore   = new Map(); // tabId → page title string
 const activeDownloads = new Map();
 const speedSamples    = new Map();
 
@@ -199,9 +200,29 @@ function classify(url,mimeType){
   if(mime==='application/octet-stream'){if(DIRECT_VIDEO_EXTS.has(ext))return 'video';if(DIRECT_AUDIO_EXTS.has(ext))return 'audio';if(STREAM_PLAYLIST_EXTS.has(ext))return 'stream';return null;}
   return null;
 }
-function buildName(url,type,directUrl){
-  if(type==='stream'){if(directUrl)return getFileName(directUrl)+' (stream)';try{const IGNORE=/^(hls|dash|stream|media|video|manifest|playlist|index|master|chunklist)$/i;const parts=new URL(url).pathname.split('/').filter(Boolean);for(let i=parts.length-2;i>=0;i--){const seg=decodeURIComponent(parts[i]);if(seg&&!IGNORE.test(seg))return seg+' (stream)';}}catch(e){}return 'stream_playlist.m3u8';}
-  return getFileName(url)||'media_file';
+// Sanitize a human-readable title into a safe filename fragment (no extension)
+function cleanTitle(title) {
+  return (title||'').replace(/[/\\:*?"<>|]/g,' ').replace(/\s+/g,' ').trim().substring(0,100);
+}
+
+function buildName(url,type,directUrl,title){
+  if(type==='stream'){
+    if(title){const c=cleanTitle(title);if(c)return c+' (stream)';}
+    if(directUrl)return getFileName(directUrl)+' (stream)';
+    try{const IGNORE=/^(hls|dash|stream|media|video|manifest|playlist|index|master|chunklist)$/i;const parts=new URL(url).pathname.split('/').filter(Boolean);for(let i=parts.length-2;i>=0;i--){const seg=decodeURIComponent(parts[i]);if(seg&&!IGNORE.test(seg))return seg+' (stream)';}}catch(e){}
+    return 'stream_playlist.m3u8';
+  }
+  const urlName=getFileName(url)||'media_file';
+  // For direct files replace only obviously generic names (no real information in the URL)
+  if(title){
+    const bare=urlName.replace(/\.[^.]+$/,'');
+    const GENERIC=/^(index|video|media|player|stream|file|download|content|watch|play|embed|hls|dash)$/i;
+    if(GENERIC.test(bare)){
+      const ext=urlName.includes('.')?urlName.slice(urlName.lastIndexOf('.')):'';
+      const c=cleanTitle(title);if(c)return c+ext;
+    }
+  }
+  return urlName;
 }
 function updateBadge(tabId){const n=tabMediaStore.get(tabId)?.size||0;chrome.action.setBadgeText({text:n>0?String(n):'',tabId});chrome.action.setBadgeBackgroundColor({color:n>0?'#e05c1a':'#888888',tabId});}
 function persistTab(tabId){const store=tabMediaStore.get(tabId);if(!store)return;const key=`${TAB_MEDIA_KEY}_${tabId}`;const items=[...store.values()];chrome.storage.session.set({[key]:items}).catch(()=>chrome.storage.local.set({[key]:items}));}
@@ -210,11 +231,13 @@ function addMedia(tabId,url,details){
   if(!tabMediaStore.has(tabId))tabMediaStore.set(tabId,new Map());
   const store=tabMediaStore.get(tabId);if(store.has(url))return;
   const directUrl=type==='stream'?extractDirectUrl(url):null;
+  // Resolve best title: item-level > tab-level page title
+  const title=details.title||tabTitleStore.get(tabId)||'';
   if(directUrl&&!store.has(directUrl)){store.set(directUrl,{url:directUrl,type:'video',fileName:getFileName(directUrl),mimeType:'video/mp4',size:0,sizeFormatted:'Unknown',timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:false,directUrl:null,ytdlpCommand:null,ffmpegCommand:null});}
-  store.set(url,{url,type,fileName:buildName(url,type,directUrl),mimeType:details.mimeType||'',size:details.size||0,sizeFormatted:type==='stream'?'HLS/DASH':(fmtBytes(details.size)||'Unknown'),timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:type==='stream',directUrl:directUrl||null,ytdlpCommand:`yt-dlp "${url}"`,ffmpegCommand:`ffmpeg -i "${url}" -c copy output.mp4`});
+  store.set(url,{url,type,fileName:buildName(url,type,directUrl,title),mimeType:details.mimeType||'',size:details.size||0,sizeFormatted:type==='stream'?'HLS/DASH':(fmtBytes(details.size)||'Unknown'),timestamp:Date.now(),tabId,pageUrl:details.pageUrl||'',isStream:type==='stream',directUrl:directUrl||null,ytdlpCommand:`yt-dlp "${url}"`,ffmpegCommand:`ffmpeg -i "${url}" -c copy output.mp4`});
   updateBadge(tabId);persistTab(tabId);
 }
-function clearTab(tabId){tabMediaStore.delete(tabId);updateBadge(tabId);const key=`${TAB_MEDIA_KEY}_${tabId}`;chrome.storage.session.remove(key).catch(()=>chrome.storage.local.remove(key));}
+function clearTab(tabId){tabMediaStore.delete(tabId);tabTitleStore.delete(tabId);updateBadge(tabId);const key=`${TAB_MEDIA_KEY}_${tabId}`;chrome.storage.session.remove(key).catch(()=>chrome.storage.local.remove(key));}
 
 // ── Network listener ───────────────────────────────────────────────────────
 chrome.webRequest.onResponseStarted.addListener(
@@ -326,9 +349,18 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
     return true;
   }
 
+  if(msg.type==='PAGE_INFO'){
+    const tabId=sender.tab?.id??-1;
+    if(tabId>=0&&msg.title) tabTitleStore.set(tabId,msg.title);
+    respond({success:true}); return true;
+  }
+
   if(msg.type==='CONTENT_MEDIA'){
     const tabId=sender.tab?.id??-1;
-    if(tabId>=0&&msg.items){for(const item of msg.items){addMedia(tabId,item.url,{mimeType:item.mimeType||'',size:0,pageUrl:item.pageUrl||'',});}}
+    if(tabId>=0){
+      if(msg.pageTitle) tabTitleStore.set(tabId,msg.pageTitle);
+      if(msg.items){for(const item of msg.items){addMedia(tabId,item.url,{mimeType:item.mimeType||'',size:0,pageUrl:item.pageUrl||'',title:item.title||'',});}}
+    }
     respond({success:true}); return true;
   }
 });

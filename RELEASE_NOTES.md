@@ -1,3 +1,38 @@
+# ClipCatch v0.9.0 — Page-Title Filenames
+
+Downloaded files are now named after the video title on the page rather than the raw URL segment, matching the behaviour of VideoHelper Online.
+
+---
+
+## What's New
+
+### Smarter filenames from the page
+
+ClipCatch now reads the title of the page (or the individual video element) and uses it as the filename when saving a download. The title is resolved in this priority order:
+
+1. **Element-specific** — `title` attribute or `aria-label` on the `<video>`/`<audio>` element
+2. **Nearest heading** — walks up the DOM up to 5 levels looking for an `<h1>`–`<h4>` near the player
+3. **Open Graph** — `<meta property="og:title">`
+4. **Page title** — `document.title`
+
+**For streams (HLS/DASH):** the page title always replaces the URL-derived name (which is usually something like `master.m3u8` or `index (stream)`).
+
+**For direct video/audio files:** the page title replaces only obviously generic URL names (`index`, `video`, `media`, `player`, `stream`, `embed`, etc.). Files that already have meaningful names in the URL keep them.
+
+### Title available for network-intercepted media
+
+The content script now sends a `PAGE_INFO` message to the background immediately when it loads — before any media network requests fire. This means media detected via the `webRequest` API (rather than DOM scanning) also gets the correct page title as its filename.
+
+---
+
+## Technical Notes
+
+- Illegal filename characters (`/ \ : * ? " < > |`) are replaced with spaces and collapsed
+- Titles are capped at 100 characters
+- `tabTitleStore` in the background worker stores one title per tab; cleared on tab close or navigation
+
+---
+
 # ClipCatch v0.8.0 — Remuxer Fix & Performance
 
 This release fixes a critical bug that made every in-browser remuxed MP4 unplayable, adds PTS continuity handling for multi-segment HLS streams, and delivers a round of performance improvements across the extension.

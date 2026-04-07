@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ClipCatch",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Detect and download videos. Built-in HLS/DASH assembler — no size limits, no external tools.",
   "permissions": [
     "webRequest",

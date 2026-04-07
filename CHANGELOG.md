@@ -2,6 +2,13 @@
 
 All notable changes to ClipCatch will be documented in this file.
 
+## [0.9.0] - 2026-04-07
+
+### Added
+- **Page-title-based filenames** — ClipCatch now extracts the best available title from the page and uses it as the download filename, the same way VideoHelper Online does. Priority order: element-specific title (`title` attribute, `aria-label`, nearest heading `h1–h4`) → Open Graph `og:title` → `document.title`. For streams the title replaces the URL-derived name entirely. For direct video/audio files it replaces only obviously generic names (`index`, `video`, `media`, `player`, etc.).
+- `PAGE_INFO` message type: the content script sends the page title to the background immediately on load (before any network requests fire) so that network-intercepted media also benefits from the title.
+- `tabTitleStore` in the background service worker stores one title per active tab; cleaned up on tab close/navigate.
+
 ## [0.8.0] - 2026-04-07
 
 ### Fixed

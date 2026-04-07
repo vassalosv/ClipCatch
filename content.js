@@ -8,6 +8,27 @@
   if (window.__clipCatchRunning) return;
   window.__clipCatchRunning = true;
 
+  // ── Page / element title extraction ───────────────────────────────────────
+  function getPageTitle() {
+    const og = document.querySelector('meta[property="og:title"]');
+    return (og?.getAttribute('content') || document.title || '').trim();
+  }
+
+  function getElementTitle(el) {
+    if (el.title?.trim())                          return el.title.trim();
+    if (el.getAttribute('aria-label')?.trim())     return el.getAttribute('aria-label').trim();
+    // Walk up up to 5 levels looking for the nearest heading inside a parent
+    let node = el.parentElement;
+    for (let d = 0; d < 5 && node && node !== document.body; d++) {
+      for (const tag of ['h1', 'h2', 'h3', 'h4']) {
+        const h = node.querySelector(tag);
+        if (h?.textContent.trim()) return h.textContent.trim();
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   // ── ALLOWED media extensions (sent to background for further classification) ──
   // NOTE: 'ts' is intentionally EXCLUDED — .ts files are HLS segments, not full videos.
   //       .m3u8 and .mpd are the playlist URLs that represent the whole video.
@@ -60,33 +81,35 @@
   function collectDomMedia() {
     const found = [];
     const seen = new Set();
+    const pageTitle = getPageTitle();
 
-    function add(rawUrl, mimeType) {
+    function add(rawUrl, mimeType, title) {
       try {
         const url = resolveUrl(rawUrl);
         if (!seen.has(url) && isAllowed(url)) {
           seen.add(url);
-          found.push({ url, mimeType: mimeType || '', pageUrl: location.href });
+          found.push({ url, mimeType: mimeType || '', pageUrl: location.href, title: title || '' });
         }
       } catch (e) {}
     }
 
-    // <video> and <audio> src / currentSrc
+    // <video> and <audio> src / currentSrc — use element-specific title, fall back to page title
     document.querySelectorAll('video, audio').forEach(el => {
-      if (el.src)        add(el.src, el.type || '');
-      if (el.currentSrc) add(el.currentSrc, '');
-      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || ''); });
+      const title = getElementTitle(el) || pageTitle;
+      if (el.src)        add(el.src, el.type || '', title);
+      if (el.currentSrc) add(el.currentSrc, '', title);
+      el.querySelectorAll('source').forEach(s => { if (s.src) add(s.src, s.type || '', title); });
     });
 
     // Standalone <source> elements
-    document.querySelectorAll('source[src]').forEach(el => add(el.src, el.type || ''));
+    document.querySelectorAll('source[src]').forEach(el => add(el.src, el.type || '', pageTitle));
 
     // <a href> links — only if extension is explicitly in ALLOWED_EXTS
     document.querySelectorAll('a[href]').forEach(el => {
       const href = el.getAttribute('href');
       if (href) {
         const ext = getExt(resolveUrl(href));
-        if (ALLOWED_EXTS.has(ext)) add(href, ''); // Must be explicitly allowed
+        if (ALLOWED_EXTS.has(ext)) add(href, '', el.textContent?.trim() || pageTitle);
       }
     });
 
@@ -95,7 +118,7 @@
       'meta[property="og:video"], meta[property="og:audio"], meta[property="og:video:url"]'
     ).forEach(el => {
       const c = el.getAttribute('content');
-      if (c) add(c, '');
+      if (c) add(c, '', pageTitle);
     });
 
     return found;
@@ -103,12 +126,18 @@
 
   function report() {
     const items = collectDomMedia();
+    const pageTitle = getPageTitle();
+    // Always inform background of current page title so network-detected media can use it
+    chrome.runtime.sendMessage({ type: 'PAGE_INFO', title: pageTitle }).catch(() => {});
     if (items.length > 0) {
-      chrome.runtime.sendMessage({ type: 'CONTENT_MEDIA', items }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'CONTENT_MEDIA', items, pageTitle }).catch(() => {});
     }
   }
 
-  // Initial scan
+  // Initial scan — also send PAGE_INFO immediately so the title is stored before
+  // any network responses arrive for this tab
+  chrome.runtime.sendMessage({ type: 'PAGE_INFO', title: getPageTitle() }).catch(() => {});
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', report);
   } else {
@@ -129,9 +158,11 @@
     if (el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') && el.currentSrc) {
       const url = resolveUrl(el.currentSrc);
       if (isAllowed(url)) {
+        const title = getElementTitle(el) || getPageTitle();
         chrome.runtime.sendMessage({
           type: 'CONTENT_MEDIA',
-          items: [{ url, mimeType: '', pageUrl: location.href }]
+          items: [{ url, mimeType: '', pageUrl: location.href, title }],
+          pageTitle: getPageTitle(),
         }).catch(() => {});
       }
     }
