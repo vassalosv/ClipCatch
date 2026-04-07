@@ -107,6 +107,23 @@ function parseSPS(nalData) {
 const TS_SYNC = 0x47;
 const TS_SIZE = 188;
 
+// Normalize PTS/DTS array to handle 33-bit wrap-around and segment discontinuities.
+// Samples must be in stream order (not yet sorted by DTS).
+function normalizePTSArray(samples) {
+  if (samples.length < 2) return;
+  let offset = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const prevPts = samples[i - 1].pts;
+    const curRaw  = samples[i].pts;
+    const delta   = (curRaw + offset) - prevPts;
+    if (delta < -90000) {               // > 1 s backward → reset or 33-bit wrap
+      offset += prevPts + 3003 - curRaw;  // continue seamlessly after last sample
+    }
+    samples[i].pts += offset;
+    samples[i].dts += offset;
+  }
+}
+
 // Returns { videoSamples, audioSamples, sps, pps, audioConfig }
 function demuxTS(buffer) {
   const data = new Uint8Array(buffer);
@@ -115,9 +132,10 @@ function demuxTS(buffer) {
   let start = 0;
   while (start < data.length && data[start] !== TS_SYNC) start++;
 
-  let pmtPid   = -1;
-  let videoPid = -1;
-  let audioPid = -1;
+  let pmtPid      = -1;
+  let videoPid    = -1;
+  let audioPid    = -1;
+  let videoIsHEVC = false;
 
   // PID → { bufs: [], pts, dts }  (accumulate TS payload until PUSI)
   const pesBuffers = new Map();
@@ -241,7 +259,8 @@ function demuxTS(buffer) {
         const sPid  = ((data[si+1]&0x1F)<<8)|data[si+2];
         const esLen = ((data[si+3]&0x0F)<<8)|data[si+4];
         // 0x1B=H.264, 0x24=H.265, 0x0F=AAC ADTS, 0x11=AAC LATM
-        if ((sType===0x1B||sType===0x24) && videoPid<0) videoPid=sPid;
+        if (sType===0x1B && videoPid<0) { videoPid=sPid; videoIsHEVC=false; }
+        if (sType===0x24 && videoPid<0) { videoPid=sPid; videoIsHEVC=true; }
         if ((sType===0x0F||sType===0x11) && audioPid<0) audioPid=sPid;
         si += 5 + esLen;
       }
@@ -260,7 +279,11 @@ function demuxTS(buffer) {
   if (videoPid >= 0) flushPES(videoPid);
   if (audioPid >= 0) flushPES(audioPid);
 
-  return { videoSamples, audioSamples, sps, pps, audioConfig };
+  // Fix PTS/DTS discontinuities (segment resets, 33-bit wrap-around)
+  normalizePTSArray(videoSamples);
+  normalizePTSArray(audioSamples);
+
+  return { videoSamples, audioSamples, sps, pps, audioConfig, videoIsHEVC };
 }
 
 // Split H.264 Annex B byte stream into NAL units
@@ -666,32 +689,43 @@ function buildAudioTrack(trackId, audioSamples, audioConfig, durationMs) {
   return { trak, rawData, chunkOffsets, sampleCount: frames.length };
 }
 
-// Patch stco offsets inside a built trak box
-function patchStco(trakBox, offsets) {
-  // Find 'stco' box inside trakBox and overwrite its chunk offsets
-  const d    = trakBox;
-  const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
-  let i = 0;
-  while (i < d.length - 8) {
+// Recursively search for a box of the given 4-char type within data[start..end].
+// Returns the byte offset of the box header, or -1 if not found.
+const BOX_CONTAINERS = new Set(['moov','trak','mdia','minf','stbl','edts','udta','dinf']);
+function findBox(data, view, type4, start, end) {
+  let i = start;
+  while (i + 8 <= end) {
     const size = view.getUint32(i);
-    const type = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
-    if (type === 'stco') {
-      // stco: version(4) + flags(4 in u32) + entry_count(4) + entries
-      const count = view.getUint32(i + 8 + 4);
-      for (let e=0; e<count && e<offsets.length; e++) {
-        view.setUint32(i + 8 + 8 + e*4, offsets[e]);
-      }
-      return;
+    if (size < 8 || i + size > end) break;
+    const t = String.fromCharCode(data[i+4],data[i+5],data[i+6],data[i+7]);
+    if (t === type4) return i;
+    if (BOX_CONTAINERS.has(t)) {
+      const r = findBox(data, view, type4, i + 8, i + size);
+      if (r >= 0) return r;
     }
-    if (size < 8) break;
     i += size;
+  }
+  return -1;
+}
+
+// Patch stco chunk offsets inside a built trak box (deep search)
+function patchStco(trakBox, offsets) {
+  const view = new DataView(trakBox.buffer, trakBox.byteOffset, trakBox.byteLength);
+  const i = findBox(trakBox, view, 'stco', 0, trakBox.length);
+  if (i < 0) return;
+  // stco layout after 8-byte header: version+flags(4), entry_count(4), offsets…
+  const count = view.getUint32(i + 12);
+  for (let e = 0; e < count && e < offsets.length; e++) {
+    view.setUint32(i + 16 + e * 4, offsets[e]);
   }
 }
 
 // ── 7. Main remux entry point ────────────────────────────────────────────────
 
 function remuxTStoMP4(tsBuffer) {
-  const { videoSamples, audioSamples, sps, pps, audioConfig } = demuxTS(tsBuffer);
+  const { videoSamples, audioSamples, sps, pps, audioConfig, videoIsHEVC } = demuxTS(tsBuffer);
+
+  if (videoIsHEVC) throw new Error('H.265/HEVC video detected — saving as raw stream');
 
   if (videoSamples.length === 0 && audioSamples.length === 0) {
     throw new Error('No video or audio samples found in TS stream');
@@ -787,26 +821,18 @@ function remuxTStoMP4(tsBuffer) {
   return concat(ftypBox, mdatBox, moovBox);
 }
 
-// Extract sample sizes from a built trak box's stsz
+// Extract sample sizes from a built trak box's stsz (deep search)
 function getStszSizes(trakBox) {
-  const d    = trakBox;
-  const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
-  let i = 0;
-  while (i < d.length - 8) {
-    const size = view.getUint32(i);
-    const type = String.fromCharCode(d[i+4],d[i+5],d[i+6],d[i+7]);
-    if (type === 'stsz') {
-      const sampleSize  = view.getUint32(i + 8 + 4); // constant size (0 = variable)
-      const sampleCount = view.getUint32(i + 8 + 8);
-      if (sampleSize > 0) return new Array(sampleCount).fill(sampleSize);
-      const sizes = [];
-      for (let e=0; e<sampleCount; e++) sizes.push(view.getUint32(i + 8 + 12 + e*4));
-      return sizes;
-    }
-    if (size < 8) break;
-    i += size;
-  }
-  return [];
+  const view = new DataView(trakBox.buffer, trakBox.byteOffset, trakBox.byteLength);
+  const i = findBox(trakBox, view, 'stsz', 0, trakBox.length);
+  if (i < 0) return [];
+  // stsz layout after 8-byte header: version+flags(4), sample_size(4), sample_count(4), entries…
+  const sampleSize  = view.getUint32(i + 12);
+  const sampleCount = view.getUint32(i + 16);
+  if (sampleSize > 0) return new Array(sampleCount).fill(sampleSize);
+  const sizes = [];
+  for (let e = 0; e < sampleCount; e++) sizes.push(view.getUint32(i + 20 + e * 4));
+  return sizes;
 }
 
 // Fix stts() call for audio (was using reduce incorrectly)

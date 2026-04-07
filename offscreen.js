@@ -133,11 +133,15 @@ async function runJob(jobId, url, fileName) {
 
   const speedWindow = [];
   let bytesDone = 0, bytesTotal = 0, segDone = 0, segTotal = 0;
+  let lastSpeedReport = 0;
 
   function updateSpeed(newBytes) {
     const now = Date.now();
     speedWindow.push({ bytes: newBytes, time: now });
     if (speedWindow.length > 8) speedWindow.shift();
+    // Throttle IPC to ~4 reports/sec
+    if (now - lastSpeedReport < 250) return;
+    lastSpeedReport = now;
     let speed = 0;
     if (speedWindow.length >= 2) {
       const dt = (speedWindow[speedWindow.length-1].time - speedWindow[0].time) / 1000;
@@ -180,8 +184,8 @@ async function runJob(jobId, url, fileName) {
     // We stream directly into a growing array of ArrayBuffers rather than
     // allocating one giant buffer — avoids hitting string/memory limits.
     const buffers    = [];
-    const CONCURRENCY = 2;
-    const DELAY_MS    = 100;
+    const CONCURRENCY = 5;
+    const DELAY_MS    = 50;
 
     for (let i = 0; i < segments.length; i += CONCURRENCY) {
       if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
@@ -237,9 +241,8 @@ async function runJob(jobId, url, fileName) {
       try {
         // remuxTStoMP4 returns a Uint8Array — use it directly (NOT .buffer which may be oversized)
         outputData = remuxTStoMP4(merged.buffer);
-        // *** Free the TS buffer immediately — MP4 data is now in outputData ***
-        // This keeps peak memory at ~1× file size instead of ~2×
-        merged.fill(0); // overwrite to release references held by remux internals
+        // Free the TS buffer — remuxTStoMP4 has already copied all data it needs
+        merged = null;
       } catch (remuxErr) {
         console.warn('[ClipCatch] Remux failed, saving raw stream as .mp4:', remuxErr.message);
         outputData = merged;

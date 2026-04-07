@@ -115,8 +115,12 @@
     report();
   }
 
-  // Watch for dynamically added players
-  const observer = new MutationObserver(report);
+  // Watch for dynamically added players — debounced to avoid scanning on every mutation
+  let reportTimer = null;
+  const observer = new MutationObserver(() => {
+    clearTimeout(reportTimer);
+    reportTimer = setTimeout(report, 300);
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   // Catch lazy-loaded video sources

@@ -441,16 +441,17 @@ function fetchAllProgressLoop(){
   chrome.runtime.sendMessage({type:'GET_HLS_JOBS'},(resp)=>{if(resp?.jobs){trackedHLSJobs=resp.jobs;updateBadge();if(!$('downloadsView').classList.contains('hidden'))renderDownloadsPanel();}});
 }
 
-window.addEventListener('unload',()=>{if(mediaPoller)clearInterval(mediaPoller);if(downloadPoller)clearInterval(downloadPoller);});
+window.addEventListener('unload',()=>{if(mediaPoller)clearInterval(mediaPoller);});
 
 async function init(){
   try{
     const[tab]=await chrome.tabs.query({active:true,currentWindow:true});
     if(tab){currentTabId=tab.id;try{footerTab.textContent=new URL(tab.url||'').hostname;}catch{footerTab.textContent='Current tab';}}
   }catch(e){}
+  $('footerVersion').textContent='v'+chrome.runtime.getManifest().version;
   loadMedia();
   fetchAllProgressLoop();
-  mediaPoller    = setInterval(loadMedia,2000);
-  downloadPoller = setInterval(fetchAllProgressLoop,800);
+  mediaPoller = setInterval(loadMedia,2000);
+  // Download/HLS updates arrive via push (DOWNLOADS_UPDATE / HLS_JOBS_UPDATE messages)
 }
 init();

@@ -12,16 +12,21 @@
   if (!jobId) { window.close(); return; }
 
   try {
-    // Read the { blob, filename } record written by the offscreen doc
+    // Read and immediately delete the transfer record in one readwrite transaction
     const record = await new Promise((resolve, reject) => {
       const req = indexedDB.open('clipcatch_transfers', 1);
       req.onupgradeneeded = e => e.target.result.createObjectStore('transfers');
       req.onerror   = () => reject(new Error('IndexedDB open failed'));
       req.onsuccess = e => {
-        const db  = e.target.result;
-        const get = db.transaction('transfers', 'readonly').objectStore('transfers').get(jobId);
-        get.onsuccess = () => get.result ? resolve(get.result) : reject(new Error('Transfer record not found'));
-        get.onerror   = () => reject(get.error);
+        const db    = e.target.result;
+        const store = db.transaction('transfers', 'readwrite').objectStore('transfers');
+        const get   = store.get(jobId);
+        get.onsuccess = () => {
+          if (!get.result) { reject(new Error('Transfer record not found')); return; }
+          store.delete(jobId);
+          resolve(get.result);
+        };
+        get.onerror = () => reject(get.error);
       };
     });
 
@@ -30,14 +35,8 @@
     chrome.downloads.download({ url: blobUrl, filename: record.filename, saveAs: false }, (downloadId) => {
       const err = chrome.runtime.lastError;
 
-      // Revoke blob URL after Chrome has had time to start reading it
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-
-      // Clean up IndexedDB entry
-      const req = indexedDB.open('clipcatch_transfers', 1);
-      req.onsuccess = e => {
-        e.target.result.transaction('transfers', 'readwrite').objectStore('transfers').delete(jobId);
-      };
+      // Revoke blob URL after Chrome has had time to start reading it (5 s is ample)
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5_000);
 
       // Notify background of outcome
       chrome.runtime.sendMessage({

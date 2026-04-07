@@ -58,23 +58,20 @@ async function closeOffscreen() {
 }
 
 // Close offscreen when no active HLS jobs remain
-function maybeCloseOffscreen() {
-  const anyActive = [...hlsJobs.values()].some(j =>
+function hasActiveHLSJobs() {
+  return [...hlsJobs.values()].some(j =>
     j.state === 'fetching' || j.state === 'downloading' ||
     j.state === 'merging'  || j.state === 'saving'
   );
-  if (!anyActive) closeOffscreen();
+}
+function maybeCloseOffscreen() {
+  if (!hasActiveHLSJobs()) closeOffscreen();
 }
 
 // ── Keep service worker alive during HLS downloads ─────────────────────────
 chrome.alarms.create('hlsKeepalive', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'hlsKeepalive') {
-    const anyActive = [...hlsJobs.values()].some(j =>
-      j.state === 'fetching'||j.state==='downloading'||j.state==='merging'||j.state==='saving'
-    );
-    if (anyActive) broadcastHLSJobs();
-  }
+  if (alarm.name === 'hlsKeepalive' && hasActiveHLSJobs()) broadcastHLSJobs();
 });
 
 // ── Format helpers ─────────────────────────────────────────────────────────
@@ -103,17 +100,30 @@ function truncateErr(msg) {
   if (!msg) return 'Unknown error';
   return msg.replace(/https?:\/\/[^\s,;)]+/g, u => { try{return new URL(u).hostname+'/…';}catch{return u.slice(0,40)+'…';} }).substring(0,100);
 }
-function broadcastHLSJobs() {
-  const jobs = [...hlsJobs.values()].map(j => ({
+function formatJob(j) {
+  return {
     id:j.id, url:j.url, fileName:j.fileName, state:j.state,
     segTotal:j.segTotal||0, segDone:j.segDone||0,
     bytesDone:j.bytesDone||0,
     error:j.error||null, downloadId:j.downloadId||null, startTime:j.startTime,
     progress:j.segTotal>0?Math.round((j.segDone/j.segTotal)*100):-1,
     bytesDoneFmt:fmtBytes(j.bytesDone)||'0 B',
+    bytesTotalFmt:fmtBytes(j.bytesTotal)||'…',
     speed:j.speed||0, speedFmt:fmtSpeed(j.speed||0), eta:j.eta||'',
     stateLabel:hlsStateLabel(j),
-  }));
+  };
+}
+function formatDl(dl) {
+  return {
+    ...dl,
+    bytesFormatted:fmtBytes(dl.bytesReceived)||'0 B',
+    totalFormatted:dl.totalBytes>0?fmtBytes(dl.totalBytes):'Unknown',
+    speedFormatted:fmtSpeed(dl.speed),
+    fileName:dl.fileName.split(/[/\\]/).pop(),
+  };
+}
+function broadcastHLSJobs() {
+  const jobs = [...hlsJobs.values()].map(formatJob);
   chrome.runtime.sendMessage({type:'HLS_JOBS_UPDATE',jobs}).catch(()=>{});
 }
 
@@ -146,13 +156,15 @@ chrome.downloads.onChanged.addListener((delta)=>{
   activeDownloads.set(id,dl); broadcastDownloads();
 });
 
-// Poll only the specific IDs we own — never query all in-progress downloads
+// Poll only downloads we own — single batched query instead of N individual calls
 setInterval(()=>{
   const inProg=[...activeDownloads.values()].filter(d=>d.state==='in_progress');
   if(!inProg.length) return;
-  for(const dl of inProg){
-    chrome.downloads.search({id:dl.id},(items)=>{
-      const item=items?.[0]; if(!item||!activeDownloads.has(item.id)) return;
+  const ids=inProg.map(d=>d.id);
+  chrome.downloads.search({state:'in_progress'},(items)=>{
+    if(!items) return;
+    for(const item of items){
+      if(!ids.includes(item.id)||!activeDownloads.has(item.id)) continue;
       const d=activeDownloads.get(item.id);
       d.bytesReceived=item.bytesReceived||d.bytesReceived;
       d.totalBytes=item.totalBytes||d.totalBytes;
@@ -162,12 +174,12 @@ setInterval(()=>{
       d.progress=d.totalBytes>0?Math.round((d.bytesReceived/d.totalBytes)*100):-1;
       d.eta=d.totalBytes>0?fmtEta(d.totalBytes-d.bytesReceived,d.speed):'';
       activeDownloads.set(item.id,d);
-    });
-  }
-  broadcastDownloads();
+    }
+    broadcastDownloads();
+  });
 },800);
 function broadcastDownloads(){
-  const list=[...activeDownloads.values()].map(dl=>({...dl,bytesFormatted:fmtBytes(dl.bytesReceived)||'0 B',totalFormatted:dl.totalBytes>0?fmtBytes(dl.totalBytes):'Unknown',speedFormatted:fmtSpeed(dl.speed),fileName:dl.fileName.split(/[/\\]/).pop()}));
+  const list=[...activeDownloads.values()].map(formatDl);
   chrome.runtime.sendMessage({type:'DOWNLOADS_UPDATE',downloads:list}).catch(()=>{});
 }
 
@@ -295,13 +307,11 @@ chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
   }
 
   if(msg.type==='GET_HLS_JOBS'){
-    const jobs=[...hlsJobs.values()].map(j=>({...j,progress:j.segTotal>0?Math.round((j.segDone/j.segTotal)*100):-1,bytesDoneFmt:fmtBytes(j.bytesDone)||'0 B',bytesTotalFmt:fmtBytes(j.bytesTotal)||'…',speedFmt:fmtSpeed(j.speed||0),stateLabel:hlsStateLabel(j)}));
-    respond({jobs}); return true;
+    respond({jobs:[...hlsJobs.values()].map(formatJob)}); return true;
   }
 
   if(msg.type==='GET_DOWNLOADS'){
-    const list=[...activeDownloads.values()].map(dl=>({...dl,bytesFormatted:fmtBytes(dl.bytesReceived)||'0 B',totalFormatted:dl.totalBytes>0?fmtBytes(dl.totalBytes):'Unknown',speedFormatted:fmtSpeed(dl.speed),fileName:dl.fileName.split(/[/\\]/).pop()}));
-    respond({downloads:list}); return true;
+    respond({downloads:[...activeDownloads.values()].map(formatDl)}); return true;
   }
 
   if(msg.type==='CANCEL_DOWNLOAD'){chrome.downloads.cancel(msg.downloadId,()=>{activeDownloads.delete(msg.downloadId);speedSamples.delete(msg.downloadId);broadcastDownloads();respond({success:true});});return true;}

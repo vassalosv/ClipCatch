@@ -2,6 +2,25 @@
 
 All notable changes to ClipCatch will be documented in this file.
 
+## [0.8.0] - 2026-04-07
+
+### Fixed
+- **Remuxed MP4 files unplayable in all players** — `patchStco()` and `getStszSizes()` used a flat box scan that started at the `trak` header itself (depth 0), immediately jumped past the entire box, and exited without ever finding `stco`/`stsz`. These boxes sit four levels deep (`trak > mdia > minf > stbl`). Result: every remuxed file had all chunk offsets set to 0 — players tried to read sample data from byte 0 of the file (the `ftyp` header) instead of the `mdat` payload. Added recursive `findBox()` helper; both functions now correctly locate deeply nested boxes.
+- **Garbled video from HLS streams with PTS discontinuities** — HLS segments often reset PTS to 0 at each boundary. After concatenation, `buildVideoTrack()` sorts samples by DTS, which interleaved samples from different segments into the wrong order. Added `normalizePTSArray()` in `demuxTS()`: detects backward jumps > 1 s and shifts subsequent timestamps to be continuous before sorting occurs.
+- **H.265/HEVC streams silently remuxed as broken H.264** — HEVC video was assigned a `videoPid` and processed through the H.264 remux path, producing structurally invalid output. `demuxTS()` now returns a `videoIsHEVC` flag; `remuxTStoMP4()` throws immediately on HEVC, triggering the raw-TS fallback path cleanly.
+- **`merged.fill(0)` called after remux** — redundant and misleading; `remuxTStoMP4()` copies all data it processes so the TS buffer is no longer referenced. Replaced with `merged = null`.
+
+### Improved
+- **HLS segment concurrency**: 2 → 5 parallel fetches; inter-batch delay 100 ms → 50 ms — significantly faster assembly on typical CDNs.
+- **Speed report throttling**: progress IPC messages capped at 4/sec (previously fired once per segment completion) — reduces message bus pressure on high-segment-count streams.
+- **MutationObserver debounced 300 ms** in content script — prevents a full DOM scan on every individual DOM mutation on dynamic pages.
+- **Download poll batched**: replaced N individual `chrome.downloads.search({id})` calls with a single `chrome.downloads.search({state:'in_progress'})` query per tick.
+- **Removed redundant popup download poller** — the 800 ms `setInterval` in the popup duplicated push updates already sent by the background (`DOWNLOADS_UPDATE` / `HLS_JOBS_UPDATE` messages).
+- **Deduplicated format helpers**: extracted `formatJob()` and `formatDl()` used by both broadcast functions and `GET_*` message handlers; extracted `hasActiveHLSJobs()` to replace two identical inline checks.
+- **`saver.js` IndexedDB**: merged two sequential `indexedDB.open()` calls into a single `readwrite` transaction that reads and deletes the transfer record atomically.
+- **Blob URL revocation**: shortened from 60 s to 5 s — Chrome begins reading the blob URL within milliseconds of `chrome.downloads.download()` being called.
+- **Version in popup footer** is now read dynamically from `chrome.runtime.getManifest().version` — will always stay in sync with `manifest.json`.
+
 ## [0.7.8] - 2026-04-01
 
 ### Changed
